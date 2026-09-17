@@ -3,11 +3,16 @@ name: Terraform Plan
 on:
   pull_request:
     branches: [main]
-    paths:
+    paths: &plan_paths
       - "terraform/**"
       - "bootstrap/**"
       - "policy/**"
       - ".github/workflows/terraform-*.yml"
+  # Re-runs the same gate against main post-merge. Not just a badge nicety:
+  # a merge commit combining two clean PRs isn't guaranteed clean itself.
+  push:
+    branches: [main]
+    paths: *plan_paths
   workflow_dispatch: {} # lets security-scan (no AWS creds needed) run standalone
 
 permissions:
@@ -16,7 +21,7 @@ permissions:
   pull-requests: write # to post the plan as a PR comment
 
 concurrency:
-  group: terraform-plan-${{ github.event.pull_request.number }}
+  group: terraform-plan-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 env:
@@ -25,7 +30,7 @@ env:
 
 jobs:
   detect-changes:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       dev: ${{ steps.filter.outputs.dev }}
@@ -127,6 +132,7 @@ jobs:
             openpolicyagent/conftest test /project/plan.json -p /policy
 
       - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
