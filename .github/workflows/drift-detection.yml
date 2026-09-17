@@ -15,6 +15,19 @@ env:
   TF_IN_AUTOMATION: "true"
 
 jobs:
+  # Always runs. Without it, a run where every detect-drift matrix leg skips
+  # has no non-skipped job at all, so GitHub reports the run's own
+  # conclusion as "skipped" - which the status badge renders as failing.
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report bootstrap status
+        run: |
+          if [ -z "${{ vars.PLAN_ROLE_ARN }}" ]; then
+            echo "::notice::AWS isn't bootstrapped for this repo yet (see bootstrap/README.md)." \
+                 "This is a template repo, not wired to a real AWS account, so there's no state to check for drift yet."
+          fi
+
   detect-drift:
     # Skips cleanly until bootstrap/ has been applied and PLAN_ROLE_ARN is
     # set as a repo variable - see bootstrap/README.md.

@@ -24,6 +24,24 @@ env:
   TF_IN_AUTOMATION: "true"
 
 jobs:
+  # Always runs, regardless of whether AWS is bootstrapped. Without this, a
+  # run where both apply-dev and apply-prod skip has *no* non-skipped job at
+  # all, and GitHub reports the whole run's conclusion as "skipped" - which
+  # the status badge renders as failing, not passing. This job's job is
+  # purely to guarantee the run always has one real success in it.
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report bootstrap status
+        run: |
+          if [ -n "${{ vars.APPLY_ROLE_ARN }}" ]; then
+            echo "AWS is bootstrapped for this repo - apply-dev/apply-prod run for real."
+          else
+            echo "::notice::AWS isn't bootstrapped for this repo yet (see bootstrap/README.md)." \
+                 "This is a template repo, not wired to a real AWS account, so apply-dev/apply-prod" \
+                 "have nothing to do until APPLY_ROLE_ARN is set as a repo variable."
+          fi
+
   apply-dev:
     # Skips cleanly (not a failure) until bootstrap/ has been applied and
     # APPLY_ROLE_ARN is set as a repo variable - see bootstrap/README.md.
