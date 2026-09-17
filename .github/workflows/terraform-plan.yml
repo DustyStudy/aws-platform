@@ -100,6 +100,9 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      # Line endings are normalized to LF by .gitattributes on checkout, so
+      # this only ever fails on real formatting drift, not CRLF noise from a
+      # contributor's local git config.
       - name: Terraform fmt check
         run: terraform fmt -check -recursive ../../
 
