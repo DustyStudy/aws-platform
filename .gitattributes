@@ -1,0 +1,13 @@
+# Normalize line endings to LF regardless of the contributor's OS/git
+# config - Terraform, YAML, and Rego are all whitespace-sensitive enough
+# that a mix of CRLF and LF across clones turns into noisy whole-file diffs.
+* text=auto eol=lf
+
+*.tf text eol=lf
+*.tfvars text eol=lf
+*.hcl text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.rego text eol=lf
+*.md text eol=lf
+*.json text eol=lf
