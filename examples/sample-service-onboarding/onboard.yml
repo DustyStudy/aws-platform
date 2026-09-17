@@ -1,0 +1,25 @@
+# Lives at .github/workflows/onboard.yml in an app team's own service repo.
+name: Request platform onboarding
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to onboard into"
+        required: true
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+jobs:
+  onboard:
+    uses: your-github-org/aws-platform/.github/workflows/onboard-service.yml@main
+    with:
+      environment: ${{ inputs.environment }}
+      team_name: payments
+      service_name: invoice-api
+      team_iam_principal_arns: '["arn:aws:iam::111111111111:role/team-payments"]'
+      quota_cpu_limits: "4"
+      quota_memory_limits: "8Gi"
+    secrets:
+      PLATFORM_REPO_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN }}

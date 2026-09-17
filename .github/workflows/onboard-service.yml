@@ -1,0 +1,99 @@
+name: Onboard Service (reusable)
+
+# Called from an app team's own repo - see examples/sample-service-onboarding.
+# It never applies Terraform directly: it opens a PR against this repo that
+# adds the team/service to the target environment's teams.auto.tfvars.json.
+# The normal terraform-plan.yml gate (fmt/validate/tflint/checkov/tfsec +
+# the conftest policy gate, including the quota ceiling check) runs against
+# that PR like any other, and a platform engineer still merges it. Self-service
+# means "no standing access to the platform's Terraform state," not "no review."
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string # dev | prod
+      team_name:
+        required: true
+        type: string
+      service_name:
+        required: true
+        type: string
+      team_iam_principal_arns:
+        required: false
+        type: string # JSON array as a string, e.g. '["arn:aws:iam::111111111111:role/team-payments"]'
+        default: "[]"
+      quota_cpu_limits:
+        required: false
+        type: string
+      quota_memory_limits:
+        required: false
+        type: string
+    secrets:
+      PLATFORM_REPO_TOKEN:
+        required: true # fine-grained PAT, contents+PR write on aws-platform only
+
+permissions:
+  contents: read
+
+jobs:
+  open-onboarding-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout aws-platform
+        uses: actions/checkout@v4
+        with:
+          repository: your-github-org/aws-platform
+          token: ${{ secrets.PLATFORM_REPO_TOKEN }}
+
+      - name: Add/update team entry
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TEAM_NAME: ${{ inputs.team_name }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          TEAM_IAM_PRINCIPAL_ARNS: ${{ inputs.team_iam_principal_arns }}
+          QUOTA_CPU_LIMITS: ${{ inputs.quota_cpu_limits }}
+          QUOTA_MEMORY_LIMITS: ${{ inputs.quota_memory_limits }}
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+
+          const path = `terraform/environments/${process.env.ENVIRONMENT}/teams.auto.tfvars.json`;
+          const doc = JSON.parse(fs.readFileSync(path, 'utf8'));
+
+          const entry = {
+            team_name: process.env.TEAM_NAME,
+            service_name: process.env.SERVICE_NAME,
+            team_iam_principal_arns: JSON.parse(process.env.TEAM_IAM_PRINCIPAL_ARNS || '[]'),
+          };
+          if (process.env.QUOTA_CPU_LIMITS) entry.quota_cpu_limits = process.env.QUOTA_CPU_LIMITS;
+          if (process.env.QUOTA_MEMORY_LIMITS) entry.quota_memory_limits = process.env.QUOTA_MEMORY_LIMITS;
+
+          const i = doc.teams.findIndex(
+            t => t.team_name === entry.team_name && t.service_name === entry.service_name
+          );
+          if (i >= 0) doc.teams[i] = entry; else doc.teams.push(entry);
+
+          fs.writeFileSync(path, JSON.stringify(doc, null, 2) + '\n');
+          EOF
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.PLATFORM_REPO_TOKEN }}
+          branch: onboard/${{ inputs.environment }}-${{ inputs.team_name }}-${{ inputs.service_name }}
+          title: "onboard: ${{ inputs.team_name }}/${{ inputs.service_name }} (${{ inputs.environment }})"
+          labels: self-service-onboarding
+          commit-message: "onboard: ${{ inputs.team_name }}/${{ inputs.service_name }} (${{ inputs.environment }})"
+          body: |
+            Opened automatically by the reusable onboarding workflow, called
+            from `${{ github.repository }}`.
+
+            Requests a namespace, ECR repository, and IRSA role for
+            **${{ inputs.team_name }}/${{ inputs.service_name }}** in
+            **${{ inputs.environment }}**.
+
+            The usual plan gate (fmt, validate, tflint, tfsec, Checkov, and
+            the conftest policy gate - including the tenant quota ceiling
+            check) runs against this PR before it can be merged.

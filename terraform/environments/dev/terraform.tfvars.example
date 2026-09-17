@@ -1,0 +1,13 @@
+aws_region = "us-east-1"
+
+platform_admin_principal_arns = [
+  "arn:aws:iam::111111111111:role/platform-team",
+]
+
+alert_email = "platform-alerts@example.com"
+
+# `teams` itself is set from terraform/environments/dev/teams.auto.tfvars.json,
+# which Terraform auto-loads - see that file and docs/ONBOARDING.md. It's
+# kept out of terraform.tfvars.example because the onboarding workflow edits
+# it programmatically (JSON), where a .tfvars file would be harder to patch
+# safely from a script.

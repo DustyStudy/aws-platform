@@ -1,0 +1,10 @@
+aws_region = "us-east-1"
+
+platform_admin_principal_arns = [
+  "arn:aws:iam::222222222222:role/platform-team",
+]
+
+alert_email = "platform-alerts@example.com"
+
+# `teams` itself is set from terraform/environments/prod/teams.auto.tfvars.json,
+# which Terraform auto-loads - see that file and docs/ONBOARDING.md.

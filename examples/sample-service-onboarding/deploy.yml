@@ -1,0 +1,50 @@
+# Lives at .github/workflows/deploy.yml in an app team's own service repo,
+# once onboarding (onboard.yml) has landed and the team has its own ECR repo
+# + namespace + IRSA-annotated ServiceAccount from the platform.
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ECR_REPOSITORY: tenant-payments-invoice-api
+  NAMESPACE: svc-payments-invoice-api
+  SERVICE_ACCOUNT: invoice-api
+  EKS_CLUSTER: platform-dev-eks
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # This role is scoped to push only to this team's own ECR repos - a
+      # separate, narrower role than anything in aws-platform itself.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push
+        run: |
+          IMAGE="${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Deploy
+        run: |
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region ${{ vars.AWS_REGION }}
+          helm upgrade --install invoice-api ./chart \
+            --namespace "$NAMESPACE" \
+            --set image.repository=${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY} \
+            --set image.tag=${{ github.sha }} \
+            --set serviceAccount.name="$SERVICE_ACCOUNT" \
+            --set serviceAccount.create=false

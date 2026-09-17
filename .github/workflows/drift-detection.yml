@@ -1,0 +1,86 @@
+name: Drift Detection
+
+on:
+  schedule:
+    - cron: "0 13 * * *" # daily, 13:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  TF_VERSION: "1.10.5"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  detect-drift:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, prod]
+      fail-fast: false
+    defaults:
+      run:
+        working-directory: terraform/environments/${{ matrix.environment }}
+    env:
+      TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-drift-${{ matrix.environment }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform init -input=false
+
+      - name: Plan (detect drift)
+        id: plan
+        run: terraform plan -input=false -no-color -detailed-exitcode -out=tfplan.binary
+        continue-on-error: true
+
+      - name: Save plan text
+        if: steps.plan.outputs.exitcode == '2'
+        run: terraform show -no-color tfplan.binary > tfplan.txt
+
+      - name: Open or update a drift issue
+        if: steps.plan.outputs.exitcode == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/environments/${{ matrix.environment }}/tfplan.txt', 'utf8').slice(0, 60000);
+            const title = `Drift detected: ${{ matrix.environment }}`;
+            const label = 'drift';
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+            const match = existing.data.find(i => i.title === title);
+
+            const body = `Scheduled drift check found a difference between state and reality in \`${{ matrix.environment }}\`.\n\n<details><summary>Plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+
+            if (match) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: match.number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels: [label] });
+            }
+
+      - name: Fail the job if drift was found
+        if: steps.plan.outputs.exitcode == '2'
+        run: exit 1
+
+      - name: Fail the job if the plan itself errored
+        if: steps.plan.outcome == 'failure' && steps.plan.outputs.exitcode != '2'
+        run: exit 1

@@ -1,0 +1,81 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "bootstrap/**"
+      - ".github/workflows/terraform-*.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to apply"
+        required: true
+        type: choice
+        options: [dev, prod]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.10.5"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  apply-dev:
+    if: github.event_name == 'push' || github.event.inputs.environment == 'dev'
+    runs-on: ubuntu-latest
+    environment: dev # no required reviewers - dev auto-applies on merge
+    defaults:
+      run:
+        working-directory: terraform/environments/dev
+    env:
+      TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-tf-apply-dev
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform init -input=false
+      - run: terraform apply -input=false -auto-approve
+
+  apply-prod:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
+    runs-on: ubuntu-latest
+    # `environment: prod` is a GitHub Environment with required reviewers
+    # configured in repo settings - the review gate lives there, not in an
+    # `if:` in this file, so it can't be bypassed by editing the workflow in
+    # the same PR that triggers it.
+    environment: prod
+    defaults:
+      run:
+        working-directory: terraform/environments/prod
+    env:
+      TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-tf-apply-prod
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform init -input=false
+      - run: terraform apply -input=false -auto-approve
