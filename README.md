@@ -15,10 +15,8 @@ trust model with no long-lived AWS credentials anywhere.
 
 Companion to my other `aws-*` repos - this one is the platform-engineering
 layer: how many teams share one cluster safely and onboard themselves onto
-it, rather than [aws-platform-blueprint](https://github.com/DustyStudy/aws-platform-blueprint)'s
-focus (one service's full stack, start to finish) or
-[aws-orgseed](https://github.com/DustyStudy/aws-orgseed)'s (bootstrapping the
-AWS accounts themselves).
+it, rather than [aws-orgseed](https://github.com/DustyStudy/aws-orgseed)'s
+focus (bootstrapping the AWS accounts themselves).
 
 ## What's here
 
