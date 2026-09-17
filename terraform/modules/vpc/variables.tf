@@ -32,7 +32,7 @@ variable "single_nat_gateway" {
 
 variable "flow_log_retention_days" {
   type    = number
-  default = 90
+  default = 365 # CKV_AWS_338
 }
 
 variable "tags" {

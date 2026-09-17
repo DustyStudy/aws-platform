@@ -1,16 +1,48 @@
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 # ---------------------------------------------------------------------------
 # Control plane
 # ---------------------------------------------------------------------------
 
 resource "aws_kms_key" "cluster" {
-  description             = "${var.cluster_name} EKS secrets envelope encryption"
+  description             = "${var.cluster_name} EKS secrets + control plane log encryption"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AccountRoot"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${data.aws_region.current.name}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt*",
+          "kms:Decrypt*",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 resource "aws_cloudwatch_log_group" "cluster" {
   name              = "/aws/eks/${var.cluster_name}/cluster"
-  retention_in_days = 90
+  retention_in_days = 365 # CKV_AWS_338 - control plane audit logs kept >= 1 year
+  kms_key_id        = aws_kms_key.cluster.arn
 }
 
 resource "aws_iam_role" "cluster" {
@@ -39,7 +71,13 @@ resource "aws_security_group" "cluster" {
   vpc_id      = var.vpc_id
   description = "EKS control plane <-> node communication"
 
+  # checkov:skip=CKV_AWS_382: the control plane and every node need outbound
+  # HTTPS to AWS APIs (STS, ECR, EC2), the pod ENIs it manages, and whatever
+  # ClusterIP/NodePort services route through it - there's no fixed CIDR/port
+  # set to scope this to short of replicating the AWS-managed EKS SG's own
+  # rule, which uses the same shape.
   egress {
+    description = "All outbound - control plane needs AWS API + node/pod reachability, not a fixed CIDR/port set"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"

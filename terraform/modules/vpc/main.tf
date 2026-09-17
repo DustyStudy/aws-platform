@@ -10,6 +10,14 @@ resource "aws_vpc" "this" {
   tags = merge(var.tags, { Name = "${var.name_prefix}-vpc" })
 }
 
+# Every VPC gets an implicit default security group; leaving it open is a
+# classic "nobody assigned it, so nobody locked it down" gap since anything
+# launched without an explicit SG lands here. No rules = no traffic.
+resource "aws_default_security_group" "this" {
+  vpc_id = aws_vpc.this.id
+  tags   = merge(var.tags, { Name = "${var.name_prefix}-default-sg-locked-down" })
+}
+
 resource "aws_internet_gateway" "this" {
   vpc_id = aws_vpc.this.id
   tags   = merge(var.tags, { Name = "${var.name_prefix}-igw" })

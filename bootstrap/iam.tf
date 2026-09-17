@@ -47,6 +47,11 @@ resource "aws_iam_role" "plan" {
   max_session_duration = 3600
 }
 
+# checkov:skip=CKV_AWS_355: every action below is a read-only Describe*/List*/
+# Get* call - AWS defines these as "*"-only actions with no resource-level
+# ARN scoping, so a narrower Resource wouldn't change what this role can do.
+# checkov:skip=CKV_AWS_356: same - read-only APIs, not "restrictable" in AWS's
+# own IAM reference despite the check's default assumption.
 data "aws_iam_policy_document" "plan_permissions" {
   statement {
     sid    = "ReadPlatformResources"
@@ -153,21 +158,57 @@ resource "aws_iam_role" "apply" {
   max_session_duration = 3600
 }
 
+# checkov:skip=CKV_AWS_356: the create/update actions below (ec2:CreateVpc,
+# eks:CreateCluster, ...) don't take a resource ARN as input - the resource
+# doesn't exist yet - so IAM requires "*" for them regardless of scoping
+# intent. What IS scoped: region (condition below), the IAM/KMS/S3
+# statements further down (role-name-prefix and bucket-ARN scoped), and the
+# trust policy itself (only this repo's main branch / protected
+# Environments can assume this role at all - see apply_trust above).
+# checkov:skip=CKV_AWS_111: same reasoning - these are resource-creation
+# writes, not unconstrained writes to arbitrary existing resources.
+# checkov:skip=CKV_AWS_108: no data-plane/exfiltration-capable actions here
+# (no s3:GetObject-on-*, no secretsmanager reads) - only control-plane
+# create/manage actions for the platform's own infrastructure.
 data "aws_iam_policy_document" "apply_permissions" {
   statement {
     sid    = "ManagePlatformResources"
     effect = "Allow"
     actions = [
-      "ec2:*",
-      "eks:*",
-      "rds:*",
-      "ecr:*",
-      "logs:*",
-      "sns:*",
-      "aps:*",
-      "grafana:*",
-      "elasticloadbalancing:*",
-      "autoscaling:*",
+      # VPC: subnets, routing, NAT, security groups, flow logs
+      "ec2:CreateVpc", "ec2:DeleteVpc", "ec2:ModifyVpcAttribute",
+      "ec2:CreateSubnet", "ec2:DeleteSubnet", "ec2:ModifySubnetAttribute",
+      "ec2:CreateInternetGateway", "ec2:DeleteInternetGateway", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway",
+      "ec2:AllocateAddress", "ec2:ReleaseAddress", "ec2:AssociateAddress", "ec2:DisassociateAddress",
+      "ec2:CreateNatGateway", "ec2:DeleteNatGateway",
+      "ec2:CreateRouteTable", "ec2:DeleteRouteTable", "ec2:CreateRoute", "ec2:DeleteRoute", "ec2:AssociateRouteTable", "ec2:DisassociateRouteTable",
+      "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
+      "ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress",
+      "ec2:CreateFlowLogs", "ec2:DeleteFlowLogs",
+      "ec2:CreateTags", "ec2:DeleteTags",
+      "ec2:Describe*",
+      # EKS: cluster, node groups, access entries
+      "eks:CreateCluster", "eks:DeleteCluster", "eks:UpdateClusterConfig", "eks:UpdateClusterVersion",
+      "eks:CreateNodegroup", "eks:DeleteNodegroup", "eks:UpdateNodegroupConfig", "eks:UpdateNodegroupVersion",
+      "eks:CreateAccessEntry", "eks:DeleteAccessEntry", "eks:AssociateAccessPolicy", "eks:DisassociateAccessPolicy",
+      "eks:TagResource", "eks:UntagResource",
+      "eks:Describe*", "eks:List*",
+      # ECR: tenant repositories
+      "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:PutLifecyclePolicy", "ecr:DeleteLifecyclePolicy", "ecr:PutImageScanningConfiguration",
+      "ecr:TagResource", "ecr:Describe*",
+      # Karpenter's interruption-handling plumbing
+      "sqs:CreateQueue", "sqs:DeleteQueue", "sqs:SetQueueAttributes", "sqs:TagQueue", "sqs:GetQueueAttributes",
+      "events:PutRule", "events:DeleteRule", "events:PutTargets", "events:RemoveTargets", "events:DescribeRule",
+      # Logs: log groups + the metric filters observability defines
+      "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:AssociateKmsKey", "logs:TagResource",
+      "logs:PutMetricFilter", "logs:DeleteMetricFilter",
+      "logs:Describe*",
+      # Alerting + cross-service observability
+      "sns:CreateTopic", "sns:DeleteTopic", "sns:SetTopicAttributes", "sns:Subscribe", "sns:Unsubscribe", "sns:TagResource",
+      "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms",
+      "aps:CreateWorkspace", "aps:DeleteWorkspace", "aps:UpdateWorkspaceAlias", "aps:TagResource",
+      "aps:CreateLoggingConfiguration", "aps:UpdateLoggingConfiguration", "aps:DeleteLoggingConfiguration", "aps:Describe*",
+      "grafana:CreateWorkspace", "grafana:DeleteWorkspace", "grafana:UpdateWorkspaceConfiguration", "grafana:TagResource", "grafana:Describe*",
     ]
     resources = ["*"]
     condition {
@@ -201,10 +242,27 @@ data "aws_iam_policy_document" "apply_permissions" {
       "iam:PassRole",
     ]
     resources = [
-      "arn:aws:iam::${local.account_id}:role/${var.project_name}-*",
+      # Environment name_prefixes ("platform-dev-*"/"platform-prod-*" -
+      # see terraform/environments/*/main.tf's locals.name_prefix) and
+      # per-service tenant roles ("tenant-<team>-<service>").
+      "arn:aws:iam::${local.account_id}:role/platform-*",
       "arn:aws:iam::${local.account_id}:role/tenant-*",
       "arn:aws:iam::${local.account_id}:oidc-provider/*",
     ]
+  }
+
+  statement {
+    sid    = "ManageKarpenterNodeInstanceProfile"
+    effect = "Allow"
+    actions = [
+      "iam:CreateInstanceProfile",
+      "iam:DeleteInstanceProfile",
+      "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:GetInstanceProfile",
+      "iam:TagInstanceProfile",
+    ]
+    resources = ["arn:aws:iam::${local.account_id}:instance-profile/platform-*"]
   }
 
   statement {
@@ -283,6 +341,10 @@ resource "aws_iam_role" "tenant_onboard" {
   max_session_duration = 3600
 }
 
+# checkov:skip=CKV_AWS_355: DescribeRepositories/GetRole/ListRoles are
+# read-only, "*"-only APIs (see the same reasoning on plan_permissions
+# above) - this role never writes anything; onboarding lands via a PR, not
+# a direct apply (see .github/workflows/onboard-service.yml).
 data "aws_iam_policy_document" "tenant_onboard_permissions" {
   # The onboarding workflow only opens a PR against this repo (see
   # .github/workflows/onboard-service.yml) - it never applies Terraform

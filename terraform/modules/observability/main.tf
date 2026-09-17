@@ -1,4 +1,5 @@
 data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
 
 # ---------------------------------------------------------------------------
 # AWS Managed Prometheus - one workspace per environment, scraped by an ADOT
@@ -6,6 +7,40 @@ data "aws_region" "current" {}
 # every tenant namespace's metrics land in one place without the platform
 # team running and patching its own Prometheus deployment.
 # ---------------------------------------------------------------------------
+
+resource "aws_kms_key" "observability" {
+  description             = "${var.name_prefix} observability log encryption"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AccountRoot"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${data.aws_region.current.name}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt*",
+          "kms:Decrypt*",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
 
 resource "aws_prometheus_workspace" "this" {
   alias = "${var.name_prefix}-amp"
@@ -18,7 +53,8 @@ resource "aws_prometheus_workspace" "this" {
 
 resource "aws_cloudwatch_log_group" "amp" {
   name              = "/aws-platform/${var.name_prefix}/amp"
-  retention_in_days = 30
+  kms_key_id        = aws_kms_key.observability.arn
+  retention_in_days = 365 # CKV_AWS_338
   tags              = var.tags
 }
 
@@ -115,42 +151,47 @@ resource "aws_iam_role" "grafana" {
   tags = var.tags
 }
 
-resource "aws_iam_role_policy" "grafana_data_sources" {
-  name = "read-data-sources"
-  role = aws_iam_role.grafana.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "aps:QueryMetrics",
-          "aps:GetSeries",
-          "aps:GetLabels",
-          "aps:GetMetricMetadata",
-          "aps:ListWorkspaces",
-          "aps:DescribeWorkspace",
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "cloudwatch:DescribeAlarmsForMetric",
-          "cloudwatch:DescribeAlarmHistory",
-          "cloudwatch:GetMetricData",
-          "cloudwatch:GetMetricStatistics",
-          "cloudwatch:ListMetrics",
-          "logs:DescribeLogGroups",
-          "logs:GetLogGroupFields",
-          "logs:StartQuery",
-          "logs:GetQueryResults",
-        ]
-        Resource = "*"
-      }
+# checkov:skip=CKV_AWS_355: AMP/CloudWatch query and read APIs (QueryMetrics,
+# GetSeries, DescribeAlarmsForMetric, GetMetricData, ...) don't support
+# resource-level ARN scoping - AWS defines them as "*"-only actions.
+# checkov:skip=CKV_AWS_111: same - these are read-only query APIs, not writes.
+data "aws_iam_policy_document" "grafana_data_sources" {
+  statement {
+    sid    = "QueryPrometheus"
+    effect = "Allow"
+    actions = [
+      "aps:QueryMetrics",
+      "aps:GetSeries",
+      "aps:GetLabels",
+      "aps:GetMetricMetadata",
+      "aps:ListWorkspaces",
+      "aps:DescribeWorkspace",
     ]
-  })
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "QueryCloudWatch"
+    effect = "Allow"
+    actions = [
+      "cloudwatch:DescribeAlarmsForMetric",
+      "cloudwatch:DescribeAlarmHistory",
+      "cloudwatch:GetMetricData",
+      "cloudwatch:GetMetricStatistics",
+      "cloudwatch:ListMetrics",
+      "logs:DescribeLogGroups",
+      "logs:GetLogGroupFields",
+      "logs:StartQuery",
+      "logs:GetQueryResults",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "grafana_data_sources" {
+  name   = "read-data-sources"
+  role   = aws_iam_role.grafana.id
+  policy = data.aws_iam_policy_document.grafana_data_sources.json
 }
 
 resource "aws_grafana_workspace" "this" {

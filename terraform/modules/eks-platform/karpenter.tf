@@ -90,6 +90,18 @@ resource "aws_iam_role" "karpenter_controller" {
   tags               = var.tags
 }
 
+# checkov:skip=CKV_AWS_355: this is the same shape AWS's own Karpenter
+# getting-started IAM policy uses - ec2:RunInstances/CreateFleet/
+# CreateLaunchTemplate/TerminateInstances don't accept a resource ARN
+# (the instance doesn't exist yet), and the Describe*/pricing/ssm calls are
+# read-only "*"-only APIs. iam:PassRole, the SQS queue, and the EKS
+# DescribeCluster call below are all scoped to a specific ARN already.
+# checkov:skip=CKV_AWS_356: same reasoning as CKV_AWS_355 above.
+# checkov:skip=CKV_AWS_111: node-lifecycle writes (Run/Terminate/CreateFleet)
+# against instances that don't exist yet, not unconstrained writes to
+# existing resources.
+# checkov:skip=CKV_AWS_108: no data-plane read/exfiltration actions here -
+# EC2 fleet management and read-only pricing/SSM lookups only.
 data "aws_iam_policy_document" "karpenter_controller_permissions" {
   statement {
     sid    = "AllowScopedEC2InstanceActions"

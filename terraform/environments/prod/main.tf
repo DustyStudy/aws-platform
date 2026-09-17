@@ -140,10 +140,23 @@ module "tenant" {
   tags = local.common_tags
 }
 
+data "aws_caller_identity" "current" {}
+
 resource "aws_kms_key" "ecr" {
   description             = "${local.name_prefix} ECR image encryption"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AccountRoot"
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+      Action    = "kms:*"
+      Resource  = "*"
+    }]
+  })
 }
 
 locals {

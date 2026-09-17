@@ -59,6 +59,7 @@ jobs:
         with:
           directory: terraform
           framework: terraform
+          config_file: .checkov.yaml
           soft_fail: false
           quiet: true
 

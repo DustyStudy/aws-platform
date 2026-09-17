@@ -86,7 +86,7 @@ module "vpc" {
   private_subnet_cidrs    = ["10.40.10.0/24", "10.40.11.0/24"]
   data_subnet_cidrs       = ["10.40.20.0/24", "10.40.21.0/24"]
   single_nat_gateway      = true # cost optimization for non-prod
-  flow_log_retention_days = 30
+  flow_log_retention_days = 365  # CKV_AWS_338 - even dev keeps rejected-traffic logs >= 1 year
   tags                    = local.common_tags
 }
 
@@ -150,10 +150,23 @@ module "tenant" {
   tags = local.common_tags
 }
 
+data "aws_caller_identity" "current" {}
+
 resource "aws_kms_key" "ecr" {
   description             = "${local.name_prefix} ECR image encryption"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AccountRoot"
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+      Action    = "kms:*"
+      Resource  = "*"
+    }]
+  })
 }
 
 locals {
