@@ -16,6 +16,9 @@ env:
 
 jobs:
   detect-drift:
+    # Skips cleanly until bootstrap/ has been applied and PLAN_ROLE_ARN is
+    # set as a repo variable - see bootstrap/README.md.
+    if: vars.PLAN_ROLE_ARN != ''
     runs-on: ubuntu-latest
     strategy:
       matrix:

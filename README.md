@@ -1,5 +1,12 @@
 # aws-platform
 
+[![Terraform Plan](https://github.com/DustyStudy/aws-platform/actions/workflows/terraform-plan.yml/badge.svg)](https://github.com/DustyStudy/aws-platform/actions/workflows/terraform-plan.yml)
+[![Terraform Apply](https://github.com/DustyStudy/aws-platform/actions/workflows/terraform-apply.yml/badge.svg)](https://github.com/DustyStudy/aws-platform/actions/workflows/terraform-apply.yml)
+[![Drift Detection](https://github.com/DustyStudy/aws-platform/actions/workflows/drift-detection.yml/badge.svg)](https://github.com/DustyStudy/aws-platform/actions/workflows/drift-detection.yml)
+[![Terraform >= 1.10](https://img.shields.io/badge/terraform-%3E%3D1.10-623CE4?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
+[![AWS](https://img.shields.io/badge/AWS-EKS%20%C2%B7%20IAM%20%C2%B7%20VPC-FF9900?logo=amazonwebservices&logoColor=white)](https://aws.amazon.com/eks/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A self-service AWS platform for teams running containerized services: one
 shared EKS cluster, a golden-path Terraform module that gives a team a
 namespace + ECR repo + scoped IAM identity in a single call, policy-as-code

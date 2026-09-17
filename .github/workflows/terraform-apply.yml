@@ -25,7 +25,11 @@ env:
 
 jobs:
   apply-dev:
-    if: github.event_name == 'push' || github.event.inputs.environment == 'dev'
+    # Skips cleanly (not a failure) until bootstrap/ has been applied and
+    # APPLY_ROLE_ARN is set as a repo variable - see bootstrap/README.md.
+    # This repo ships with no AWS account wired up, so this guard is what
+    # keeps a fresh clone's Actions tab green instead of red.
+    if: vars.APPLY_ROLE_ARN != '' && (github.event_name == 'push' || github.event.inputs.environment == 'dev')
     runs-on: ubuntu-latest
     environment: dev # no required reviewers - dev auto-applies on merge
     defaults:
@@ -51,7 +55,7 @@ jobs:
       - run: terraform apply -input=false -auto-approve
 
   apply-prod:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
+    if: vars.APPLY_ROLE_ARN != '' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     runs-on: ubuntu-latest
     # `environment: prod` is a GitHub Environment with required reviewers
     # configured in repo settings - the review gate lives there, not in an

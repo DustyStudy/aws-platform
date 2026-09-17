@@ -8,6 +8,7 @@ on:
       - "bootstrap/**"
       - "policy/**"
       - ".github/workflows/terraform-*.yml"
+  workflow_dispatch: {} # lets security-scan (no AWS creds needed) run standalone
 
 permissions:
   id-token: write # OIDC -> AWS, no static access keys anywhere in this repo
@@ -24,6 +25,7 @@ env:
 
 jobs:
   detect-changes:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       dev: ${{ steps.filter.outputs.dev }}
@@ -69,7 +71,11 @@ jobs:
 
   plan:
     needs: [detect-changes, security-scan]
-    if: needs.detect-changes.outputs.dev == 'true' || needs.detect-changes.outputs.prod == 'true'
+    # Requires both a PR (detect-changes only runs then) and a bootstrapped
+    # PLAN_ROLE_ARN - see bootstrap/README.md. Skips cleanly otherwise.
+    if: |
+      vars.PLAN_ROLE_ARN != '' &&
+      (needs.detect-changes.outputs.dev == 'true' || needs.detect-changes.outputs.prod == 'true')
     runs-on: ubuntu-latest
     strategy:
       matrix:
