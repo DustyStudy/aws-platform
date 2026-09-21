@@ -20,13 +20,6 @@ locals {
   has_pager = nonsensitive(var.pager_endpoint != null)
 }
 
-check "pager_configured" {
-  assert {
-    condition     = !var.require_pager || local.has_pager
-    error_message = "require_pager is set but pager_endpoint is null - SEV1/SEV2 alerts would go nowhere."
-  }
-}
-
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 

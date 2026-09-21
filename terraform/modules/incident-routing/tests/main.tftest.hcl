@@ -43,7 +43,7 @@ run "prod_requires_pager" {
     require_pager  = true
   }
 
-  expect_failures = [check.pager_configured]
+  expect_failures = [var.require_pager]
 }
 
 run "rejects_plain_http_pager" {
