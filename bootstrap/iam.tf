@@ -17,6 +17,30 @@ locals {
 
 # --- plan -------------------------------------------------------------------
 
+locals {
+  platform_owner = split("/", var.platform_repo)[0]
+  platform_name  = split("/", var.platform_repo)[1]
+
+  # The `sub` claim prefix GitHub puts in the token for the platform repo. The
+  # immutable form pins exact numeric owner/repo IDs (see github_subject_format).
+  platform_subject_prefix = (
+    var.github_subject_format == "immutable"
+    ? "repo:${local.platform_owner}@${var.github_owner_id}/${local.platform_name}@${var.platform_repo_id}"
+    : "repo:${var.platform_repo}"
+  )
+
+  # App-team repos: their numeric repo IDs aren't known here, so the immutable
+  # form pins the OWNER ID and wildcards the repo ID. That is safe because the
+  # tenant-onboard trust also requires job_workflow_ref to be the platform's own
+  # onboarding workflow on main - that condition is what narrows who can call it.
+  app_team_subject_patterns = [
+    for repo in var.app_team_repos :
+    var.github_subject_format == "immutable"
+    ? "repo:${split("/", repo)[0]}@${var.github_owner_id}/${split("/", repo)[1]}@*:*"
+    : "repo:${repo}:*"
+  ]
+}
+
 data "aws_iam_policy_document" "plan_trust" {
   statement {
     effect  = "Allow"
@@ -36,7 +60,7 @@ data "aws_iam_policy_document" "plan_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.platform_repo}:*"]
+      values   = ["${local.platform_subject_prefix}:*"]
     }
   }
 }
@@ -144,9 +168,9 @@ data "aws_iam_policy_document" "apply_trust" {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.platform_repo}:ref:refs/heads/main",
-        "repo:${var.platform_repo}:environment:dev",
-        "repo:${var.platform_repo}:environment:prod",
+        "${local.platform_subject_prefix}:ref:refs/heads/main",
+        "${local.platform_subject_prefix}:environment:dev",
+        "${local.platform_subject_prefix}:environment:prod",
       ]
     }
   }
@@ -324,7 +348,7 @@ data "aws_iam_policy_document" "tenant_onboard_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for repo in var.app_team_repos : "repo:${repo}:*"]
+      values   = local.app_team_subject_patterns
     }
 
     condition {

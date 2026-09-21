@@ -63,7 +63,7 @@ jobs:
       - name: terraform test (every module that has tests)
         run: |
           set -euo pipefail
-          for dir in $(find terraform/modules -type d -name tests -exec dirname {} \; | sort); do
+          for dir in $(find terraform/modules bootstrap -type d -name tests -exec dirname {} \; | sort); do
             echo "::group::$dir"
             terraform -chdir="$dir" init -backend=false -input=false >/dev/null
             terraform -chdir="$dir" test

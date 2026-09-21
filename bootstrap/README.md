@@ -13,8 +13,27 @@ cd bootstrap
 terraform init
 terraform apply \
   -var="github_org=your-github-org" \
-  -var="platform_repo=your-github-org/aws-platform"
+  -var="platform_repo=your-github-org/aws-platform" \
+  -var="github_owner_id=<owner-id>" \
+  -var="platform_repo_id=<repo-id>"
 ```
+
+**The two IDs matter.** GitHub emits the OIDC `sub` claim as
+`repo:<owner>@<owner-id>/<repo>@<repo-id>:<suffix>` for repos with
+`use_immutable_subject` (the default for recently created repos), not the classic
+`repo:<owner>/<repo>:<suffix>`. A trust condition written for the wrong form never
+matches - nothing errors, the CI roles just can never be assumed. Look them up:
+
+```bash
+gh api repos/<owner>/<repo>/actions/oidc/customization/sub   # use_immutable_subject: true?
+gh api repos/<owner>/<repo> -q '.owner.id, .id'               # owner ID, repo ID
+```
+
+`github_subject_format` defaults to `immutable` and refuses to plan without the IDs;
+set it to `classic` only if `use_immutable_subject` is `false`. Pinning the exact IDs
+also means a renamed, deleted or re-created repo can't impersonate the platform repo.
+(App-team repos are matched by *owner* ID, since their repo IDs aren't known here;
+`tenant-onboard`'s `job_workflow_ref` condition is what narrows who can call it.)
 
 Then take the outputs and:
 
