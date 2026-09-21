@@ -14,6 +14,14 @@ on:
         required: true
         type: choice
         options: [dev, prod]
+      change_request:
+        description: "prod only: ServiceNow change record (CHG0000000) authorizing this apply"
+        required: false
+        type: string
+      emergency_incident:
+        description: "prod only: ServiceNow P1/P2 incident (INC0000000) - use INSTEAD of a change record for an emergency change"
+        required: false
+        type: string
 
 permissions:
   id-token: write
@@ -85,8 +93,32 @@ jobs:
         working-directory: terraform/environments/prod
     env:
       TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+      # ITSM change gate - enforced whenever SERVICENOW_INSTANCE is set.
+      # See docs/CHANGE-MANAGEMENT.md.
+      SN_INSTANCE: ${{ vars.SERVICENOW_INSTANCE }}
+      SN_USER: ${{ secrets.SERVICENOW_USER }}
+      SN_PASSWORD: ${{ secrets.SERVICENOW_PASSWORD }}
+      CHANGE_REQUEST: ${{ github.event.inputs.change_request }}
+      EMERGENCY_INCIDENT: ${{ github.event.inputs.emergency_incident }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Runs AFTER the environment's reviewer approval (the job only starts once
+      # that's granted), so the change window is checked at the moment of apply
+      # - not when someone queued the run hours earlier. Inputs go through env
+      # vars, never interpolated into the script, so a crafted input can't inject
+      # shell.
+      - name: Change gate (ServiceNow)
+        if: env.SN_INSTANCE != ''
+        run: |
+          args=()
+          [ -n "$CHANGE_REQUEST" ] && args+=(--change "$CHANGE_REQUEST")
+          [ -n "$EMERGENCY_INCIDENT" ] && args+=(--emergency-incident "$EMERGENCY_INCIDENT")
+          python3 "$GITHUB_WORKSPACE/scripts/change_gate.py" check "${args[@]}"
+
+      - name: Change gate not configured
+        if: env.SN_INSTANCE == ''
+        run: echo "::notice::SERVICENOW_INSTANCE is not set - no change-record gate on this prod apply. Only the 'prod' environment reviewers stand between merge and apply. See docs/CHANGE-MANAGEMENT.md."
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -101,3 +133,42 @@ jobs:
 
       - run: terraform init -input=false
       - run: terraform apply -input=false -auto-approve
+
+      # Close the loop: the change record shows what actually happened, without
+      # anyone copy-pasting. Best-effort - a note failing must not fail a
+      # successful apply.
+      - name: Record outcome on change record
+        if: always() && env.SN_INSTANCE != '' && env.CHANGE_REQUEST != ''
+        continue-on-error: true
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/change_gate.py" note \
+            --change "$CHANGE_REQUEST" \
+            --message "terraform apply (prod) ${{ job.status }} - commit ${{ github.sha }} - run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # An emergency change bypasses the pre-approval, so it gets a mandatory
+  # after-the-fact review: an issue that must be closed by a human.
+  emergency-review:
+    needs: apply-prod
+    if: always() && needs.apply-prod.result != 'skipped' && github.event.inputs.emergency_incident != ''
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open post-implementation review issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INCIDENT: ${{ github.event.inputs.emergency_incident }}
+          RESULT: ${{ needs.apply-prod.result }}
+        run: |
+          gh label create emergency-change --repo "$GITHUB_REPOSITORY" --color B60205 \
+            --description "Prod change applied under the emergency path; needs post-implementation review" 2>/dev/null || true
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Post-implementation review: emergency change for $INCIDENT" \
+            --label "emergency-change" \
+            --body "Emergency prod apply for **$INCIDENT** finished with result **$RESULT** (commit \`$GITHUB_SHA\`, run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID).
+
+          Required within 5 business days:
+          - [ ] Retroactive change record linked and approved
+          - [ ] Change reviewed: was it the right mitigation, was there a safer one?
+          - [ ] Follow-up fixed via the normal change process (this apply skipped the pre-approval)
+          - [ ] Referenced in the incident postmortem"
