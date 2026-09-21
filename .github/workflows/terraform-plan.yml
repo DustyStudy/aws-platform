@@ -7,6 +7,8 @@ on:
       - "terraform/**"
       - "bootstrap/**"
       - "policy/**"
+      - "scripts/**"
+      - "examples/hybrid-network/**"
       - ".github/workflows/terraform-*.yml"
   # Re-runs the same gate against main post-merge. Not just a badge nicety:
   # a merge commit combining two clean PRs isn't guaranteed clean itself.
@@ -47,6 +49,35 @@ jobs:
             prod:
               - 'terraform/environments/prod/**'
               - 'terraform/modules/**'
+
+  # Module unit tests use mocked providers: no AWS account, no credentials, no
+  # cost. They pin the behavior that matters (segmentation defaults, pinned TLS
+  # suites, input validation) so a refactor can't quietly loosen it.
+  module-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform test (every module that has tests)
+        run: |
+          set -euo pipefail
+          for dir in $(find terraform/modules -type d -name tests -exec dirname {} \; | sort); do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+            terraform -chdir="$dir" test
+            echo "::endgroup::"
+          done
+      - name: Validate reference compositions
+        run: |
+          set -euo pipefail
+          for dir in examples/hybrid-network; do
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+            terraform -chdir="$dir" validate
+          done
+      - name: Change gate unit tests
+        run: python3 -m unittest scripts/test_change_gate.py -v
 
   security-scan:
     runs-on: ubuntu-latest

@@ -28,9 +28,17 @@ terraform/
     eks-platform/       # private-endpoint EKS, IRSA, SSM node access, Karpenter autoscaling
     tenant-namespace/  # the golden path: namespace + quota + network policy + ECR + IRSA role, per service
     observability/     # AWS Managed Prometheus + Grafana, CloudWatch alarms
+    transit-gateway/   # hub-and-spoke TGW; default route table OFF, segmentation via explicit association/propagation
+    site-to-site-vpn/  # BGP IKEv2 VPN to the TGW, pinned crypto suites, tunnel logs + redundancy-lost alarm
+    direct-connect/    # DX gateway + transit VIFs + TGW association on an existing connection
+    route53-resolver/  # hybrid DNS: inbound/outbound endpoints, forward rules, RAM-shared, query logs
+    ipam/              # org supernet -> per-region pools, so CIDRs can't overlap by construction
+    load-balancer/     # hardened ALB/NLB: internal by default, TLS-only, access logs required, alarms
+    incident-routing/  # sev1-sev4 SNS topics; SEV1/2 page, SEV3/4 ticket; dead-lettered + monitored pager
   environments/
     dev/               # single NAT, small system node group, no Grafana workspace (cost-optimized)
     prod/              # HA NAT, larger system node group, Grafana workspace, tighter alarms
+scripts/change_gate.py # ITSM change gate (ServiceNow) used by the prod apply, + its unit tests
 policy/conftest/       # OPA policies enforced in CI: tags, encryption, open security groups, tenant quota ceilings
 .github/workflows/
   terraform-plan.yml            # PR gate: fmt/validate/tflint/tfsec/checkov + conftest, plan posted as a PR comment
@@ -40,8 +48,28 @@ policy/conftest/       # OPA policies enforced in CI: tags, encryption, open sec
 docs/
   ARCHITECTURE.md     # trust policy shapes, tenant isolation model, state layout
   ONBOARDING.md        # the self-service path, end to end, from an app team's point of view
+  CHANGE-MANAGEMENT.md # how PR -> plan -> change record -> gated apply maps onto an ITSM process
+  incident-response/   # severity model, roles, on-call, postmortem template, runbooks, game-day scenarios
 examples/sample-service-onboarding/  # what the integration looks like from an app team's repo
+examples/hybrid-network/             # TGW + DX + VPN + hybrid DNS + ALB composed together (plan-tested)
 ```
+
+## Hybrid networking, change control, and incident response
+
+Beyond the EKS platform, the repo covers the operational side of running it:
+
+- **Hybrid connectivity** - Transit Gateway hub-and-spoke with explicit
+  segmentation, Site-to-Site VPN, Direct Connect, Route 53 Resolver, IPAM and
+  hardened load balancers. `examples/hybrid-network` composes them; its plan
+  test runs with unknown IDs so first-deploy `for_each` mistakes are caught in CI.
+- **Change management** - a prod apply needs an approved ServiceNow change
+  record in its window (checked *after* environment approval, fails closed),
+  or an active P1/P2 incident for the emergency path, which auto-opens a
+  post-implementation review. See [`docs/CHANGE-MANAGEMENT.md`](docs/CHANGE-MANAGEMENT.md).
+- **Incident response** - severity-tiered paging with a monitored pager,
+  runbooks linked from the alarms themselves, and tabletop scenarios. See
+  [`docs/incident-response/`](docs/incident-response/INCIDENT-RESPONSE.md).
+  The exercise log is deliberately empty until an exercise is actually run.
 
 ## Design decisions
 
