@@ -134,6 +134,15 @@ resource "aws_sqs_queue" "pager_dlq" {
   kms_master_key_id         = aws_kms_key.alerts.arn
   message_retention_seconds = 1209600
   tags                      = var.tags
+
+  # Hard plan-time error (a check block would only warn). Lives on this
+  # resource because it always exists, unlike the pager subscriptions.
+  lifecycle {
+    precondition {
+      condition     = !var.require_pager || local.has_pager
+      error_message = "require_pager is set but pager_endpoint is null - SEV1/SEV2 alerts would go nowhere."
+    }
+  }
 }
 
 data "aws_iam_policy_document" "dlq" {

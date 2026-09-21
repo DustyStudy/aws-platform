@@ -43,7 +43,7 @@ run "prod_requires_pager" {
     require_pager  = true
   }
 
-  expect_failures = [var.require_pager]
+  expect_failures = [aws_sqs_queue.pager_dlq]
 }
 
 run "rejects_plain_http_pager" {
