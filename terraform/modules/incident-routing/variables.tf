@@ -28,9 +28,14 @@ variable "ticket_emails" {
 }
 
 variable "require_pager" {
-  description = "When true, planning fails if pager_endpoint is null. Set this in prod."
+  description = "When true, planning fails if pager_endpoint is null. Set this in prod. (A variable validation rather than a check block: check failures are only warnings, and this must be a hard error.)"
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.require_pager || var.pager_endpoint != null
+    error_message = "require_pager is set but pager_endpoint is null - SEV1/SEV2 alerts would go nowhere."
+  }
 }
 
 variable "tags" {
