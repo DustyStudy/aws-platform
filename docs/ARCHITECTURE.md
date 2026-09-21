@@ -45,10 +45,15 @@ The trust policy shapes (condensed):
   "Principal": { "Federated": "arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com" },
   "Condition": {
     "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-    "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:your-github-org/aws-platform:*" }
+    "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:your-github-org@<owner-id>/aws-platform@<repo-id>:*" }
   }
 }
 ```
+
+GitHub emits this immutable `sub` form (numeric owner and repo IDs) for repos with
+`use_immutable_subject`, not the classic `repo:<owner>/<repo>:*`; the IDs are pinned
+exactly so a renamed or re-created repo can't impersonate the platform repo. See
+`bootstrap/README.md`.
 
 `tenant-onboard`'s trust policy additionally pins `job_workflow_ref` to the
 exact reusable workflow file + ref, so an app team can call the golden path
