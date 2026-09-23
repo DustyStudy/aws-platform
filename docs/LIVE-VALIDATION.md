@@ -17,7 +17,7 @@ Before the fixes, a first `terraform apply` could not create an EKS cluster.
 | AWS | Member account `2645····3329` ("Dev") of an AWS Organizations org, `us-east-1` |
 | Operator | IAM Identity Center `AdministratorAccess` session (bootstrap and teardown only, as `bootstrap/README.md` prescribes) |
 | CI | GitHub Actions in this repo, assuming the bootstrap roles via GitHub OIDC (immutable `sub` claim) |
-| Tooling | Terraform 1.15.8 locally / 1.10.5 in CI, AWS provider 5.100, kubectl 1.35, conftest 0.70, tfsec 1.28, Checkov, tflint 0.64 |
+| Tooling | Terraform 1.15.8 locally / 1.10.5 in CI; AWS provider 5.100 (then 6.x - see [Provider upgrade](#provider-upgrade-re-validation)), kubectl 1.35, conftest 0.70, tfsec 1.28, Checkov, tflint 0.64 |
 | Deployed | `bootstrap/` → `terraform/environments/dev` (VPC, EKS 1.35, Karpenter, two tenants, AMP, alarms) + a live harness for the hybrid-networking modules |
 
 Test-only settings, not repo defaults: the dev EKS endpoint was public to
@@ -134,7 +134,8 @@ and destroyed.
 | 21 | Drift detection treated a never-applied environment as drifted, and its "is it deployed" check couldn't work: `setup-terraform`'s wrapper adds output to stdout, so `terraform state list` was never empty | prod leg failed and opened a drift issue | check with `terraform-bin`; skip with a notice (live: prod skipped, run green) |
 | 22 | Destroy ordering, one layer down: EKS only referenced `vpc_id`/subnet IDs, so Terraform deleted the egress path first | clean-room destroy: Karpenter couldn't reach the EC2 API (`dial tcp ...:443: i/o timeout`) to terminate its nodes, and the `karpenter-defaults` uninstall timed out. A first fix covered only the private route and NAT gateway; the next run lost the *public* subnets' route to the internet gateway instead | the VPC module's `private_subnet_ids` output depends on the whole path (private routes → NAT → public route → IGW), so everything in those subnets is destroyed while egress still works |
 | 23 | Introduced during this test by the IAM tightening in defect 5: Karpenter's `iam:GetInstanceProfile` was scoped to the Terraform-managed profile, but on EC2NodeClass deletion Karpenter also checks the `<cluster>_<hash>` profile it would have generated | clean-room teardown: NodeClass stuck `Terminating` on `not authorized to perform: iam:GetInstanceProfile on resource: instance profile platform-dev-eks_158...` | allow reads of that name pattern too (still narrower than upstream's `*`); the NodeClass then finalized immediately |
-| 24 | A managed scraper took ~15m to create and over 20m to delete - longer than the provider's default delete timeout | clean-room destroy: `waiting for Prometheus Scraper ... delete: timeout while waiting for resource to be gone (last state: 'DELETING', timeout: 20m0s)` | explicit `timeouts { create = "30m", delete = "45m" }` |
+| 24 | A managed scraper took 15-24m to create and over 20m to delete - past the provider's 20m defaults | clean-room destroy: `waiting for Prometheus Scraper ... delete: timeout while waiting for resource to be gone (last state: 'DELETING', timeout: 20m0s)` | explicit `timeouts { create = "30m", delete = "45m" }` |
+| 25 | CI only validated the environment roots inside the plan job, which skips when AWS isn't configured | Dependabot's provider-major PR (#6) showed green while breaking `dev`/`prod` (`Unsupported block type` in the Helm 3 provider block) | `module-tests` validates both environment roots with `-backend=false`; #6 superseded by #13 |
 
 ## Clean-room run of the final code
 
@@ -149,6 +150,26 @@ nothing, to show that a first apply works in one pass with no manual steps:
 | `terraform destroy` with Karpenter nodes and a workload still running, no manual drain or finalizer edits | First two attempts exposed defects 22-24 (egress removed too early, then only partly kept; scraper delete timeout) - each fixed and the environment rebuilt. Final attempt: `106 destroyed`. Tenant namespaces gone in 7s, `karpenter-defaults` in 36s (vs 5m timeouts before), egress removed only after the cluster, scraper deleted in 11m within its new timeout |
 | Manual cleanup in that final attempt | One orphaned VPC CNI ENI (`aws-K8S-i-...`) and the `eks-cluster-sg-*` it pinned. The un-drained test workload made Karpenter launch a replacement node mid-teardown, and that node was terminated while the CNI was still attaching an ENI - an upstream race. The documented drain step (delete the `NodePool` first) avoids it; the earlier teardown that used it leaked nothing. Recovery steps added to [ARCHITECTURE.md](ARCHITECTURE.md#tearing-an-environment-down) |
 
+## Provider upgrade re-validation
+
+After the fixes merged, the provider majors Dependabot proposed (AWS 5 → 6,
+Helm 2 → 3, Kubernetes 2 → 3) and the Actions majors (checkout 7,
+configure-aws-credentials 6, setup-terraform 4, github-script 9, ...) were
+taken through the same live cycle before merging -
+[#13](https://github.com/DustyStudy/aws-platform/pull/13) and
+[#7](https://github.com/DustyStudy/aws-platform/pull/7):
+
+| Step | Result |
+|---|---|
+| Migration | Helm 3 provider syntax (`kubernetes = {}`), `data.aws_region.region` (AWS 6) |
+| `bootstrap/` + dev from empty state | `19 added`, then `106 added` in one pass; `terraform plan` right after: `No changes` |
+| Functional re-check | add-ons `ACTIVE`, Karpenter spot nodes, same-namespace `200` / cross-namespace blocked, cross-tenant secret `AccessDeniedException`, quota enforced, ~61k AMP series, 3,276 Container Insights streams, alarm → SNS `Successfully executed action` |
+| PR checks on #13 | all green, including the plan role against the live environment |
+| Drift Detection | dev `No changes`, prod skipped |
+| `main` pipeline after merge | Terraform Plan green; **Terraform Apply `apply-dev` through the OIDC apply role inside the `main`-only `dev` Environment: `No changes ... Apply complete!`** ([run](https://github.com/DustyStudy/aws-platform/actions/runs/35920441328)) |
+| `kubernetes_*` → `*_v1` | tried with `moved` blocks against the live state; the provider rejects it (`Move Resource State Not Supported`), so the deprecated-but-supported unversioned types were kept rather than recreating every tenant namespace |
+| Teardown (documented drain first) | drained the `NodePool`, then `terraform destroy`: `106 destroyed` with no errors and no manual steps (namespaces 13s, `karpenter-defaults` 2s, scraper 13m47s, cluster 3m35s); `bootstrap/` `19 destroyed` |
+
 ## Not covered live
 
 - **Direct Connect** - needs a physical connection; covered by its mocked unit tests and the hybrid example's plan test.
@@ -160,7 +181,7 @@ nothing, to show that a first apply works in one pass with no manual steps:
 
 Everything was destroyed with Terraform: the hybrid harness (127 resources),
 the dev environment (106), then `bootstrap/` (19) after its versioned state
-buckets were emptied. The repo's Actions variables (`PLAN_ROLE_ARN`,
+buckets were emptied - and again after the provider-upgrade re-validation. The repo's Actions variables (`PLAN_ROLE_ARN`,
 `APPLY_ROLE_ARN`, ...) were deleted, so the workflows skip their AWS jobs
 again.
 
@@ -171,7 +192,7 @@ repositories, SQS queues, SNS topics, CloudWatch alarms, secrets, S3 buckets,
 log groups, OIDC providers, instance profiles or platform IAM roles. What
 remains is inert and free:
 
-- 30 customer-managed KMS keys in `PendingDeletion` (AWS enforces a waiting
+- 35 customer-managed KMS keys in `PendingDeletion` (AWS enforces a waiting
   period; keys pending deletion aren't billed)
 - Service-linked roles that AWS created on first use of EKS, managed node
   groups, Auto Scaling, Spot, ELB, IPAM and Transit Gateway, plus the
