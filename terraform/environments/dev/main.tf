@@ -120,10 +120,13 @@ module "eks" {
 module "observability" {
   source = "../../modules/observability"
 
-  name_prefix       = local.name_prefix
-  cluster_name      = module.eks.cluster_name
-  oidc_provider_arn = module.eks.oidc_provider_arn
-  oidc_provider_url = module.eks.oidc_provider_url
+  name_prefix               = local.name_prefix
+  cluster_name              = module.eks.cluster_name
+  cluster_arn               = module.eks.cluster_arn
+  cluster_security_group_id = module.eks.cluster_primary_security_group_id
+  private_subnet_ids        = module.vpc.private_subnet_ids
+  oidc_provider_arn         = module.eks.oidc_provider_arn
+  oidc_provider_url         = module.eks.oidc_provider_url
 
   create_grafana_workspace = false # dev doesn't need its own AMG workspace
   alert_email              = var.alert_email

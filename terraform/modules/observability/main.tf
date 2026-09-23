@@ -2,10 +2,10 @@ data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
 # ---------------------------------------------------------------------------
-# AWS Managed Prometheus - one workspace per environment, scraped by an ADOT
-# collector running in-cluster (see helm_release.adot_collector below) so
-# every tenant namespace's metrics land in one place without the platform
-# team running and patching its own Prometheus deployment.
+# AWS Managed Prometheus - one workspace per environment, fed by the AWS
+# managed scraper (see aws_prometheus_scraper below), so every tenant
+# namespace's metrics land in one place without the platform team running and
+# patching its own Prometheus deployment.
 # ---------------------------------------------------------------------------
 
 resource "aws_kms_key" "observability" {
@@ -72,16 +72,116 @@ resource "aws_cloudwatch_log_group" "amp" {
   tags              = var.tags
 }
 
-# --- ADOT collector: scrapes cluster + tenant workloads, remote_writes to AMP ---
+# --- Metrics collection -------------------------------------------------------
+# Neither collector below runs as a pod that needs instance metadata. The
+# platform's nodes require IMDSv2 with a hop limit of 1, so pods can't reach
+# the node role's credentials, and that also means a pod-network collector
+# can't read IMDS. (The ADOT DaemonSet this replaces failed on exactly that and
+# dropped every metric.)
+#
+#   Prometheus -> AMP: the AWS managed scraper. It runs outside the cluster
+#                      and reaches the API server and kubelets through ENIs in
+#                      the private subnets. There's nothing in-cluster to patch.
+#   Container Insights -> CloudWatch: the amazon-cloudwatch-observability EKS
+#                      add-on. Its node metrics are what the node CPU/memory
+#                      alarms below evaluate.
 
-locals {
-  # Where the ADOT chart puts the collector DaemonSet and its ServiceAccount;
-  # the IRSA trust below has to name exactly this pair.
-  adot_namespace       = "amazon-metrics"
-  adot_service_account = "adot-collector"
+resource "aws_prometheus_scraper" "this" {
+  count = var.enable_metrics_collection ? 1 : 0
+
+  alias = "${var.name_prefix}-scraper"
+
+  source {
+    eks {
+      cluster_arn        = var.cluster_arn
+      subnet_ids         = var.private_subnet_ids
+      security_group_ids = [var.cluster_security_group_id]
+    }
+  }
+
+  destination {
+    amp {
+      workspace_arn = aws_prometheus_workspace.this.arn
+    }
+  }
+
+  scrape_configuration = templatefile("${path.module}/scrape-config.yaml.tftpl", {
+    cluster_name = var.cluster_name
+  })
+
+  tags = var.tags
 }
 
-data "aws_iam_policy_document" "adot_trust" {
+# The scraper authenticates to the cluster as its own service-linked role,
+# mapped to a Kubernetes user that gets read-only discovery/metrics RBAC.
+resource "aws_eks_access_entry" "scraper" {
+  count = var.enable_metrics_collection ? 1 : 0
+
+  cluster_name      = var.cluster_name
+  principal_arn     = aws_prometheus_scraper.this[0].role_arn
+  kubernetes_groups = []
+  user_name         = "aps-collector-user"
+}
+
+resource "kubernetes_cluster_role" "scraper" {
+  count = var.enable_metrics_collection ? 1 : 0
+
+  metadata {
+    name = "aps-collector-role"
+  }
+
+  rule {
+    api_groups = [""]
+    resources  = ["nodes", "nodes/proxy", "nodes/metrics", "services", "endpoints", "pods", "ingresses", "configmaps"]
+    verbs      = ["describe", "get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = ["extensions", "networking.k8s.io"]
+    resources  = ["ingresses/status", "ingresses"]
+    verbs      = ["describe", "get", "list", "watch"]
+  }
+
+  rule {
+    api_groups = ["metrics.eks.amazonaws.com"]
+    resources  = ["kcm/metrics", "ksh/metrics"]
+    verbs      = ["get"]
+  }
+
+  rule {
+    non_resource_urls = ["/metrics"]
+    verbs             = ["get"]
+  }
+}
+
+resource "kubernetes_cluster_role_binding" "scraper" {
+  count = var.enable_metrics_collection ? 1 : 0
+
+  metadata {
+    name = "aps-collector-user-role-binding"
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = kubernetes_cluster_role.scraper[0].metadata[0].name
+  }
+
+  subject {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "User"
+    name      = aws_eks_access_entry.scraper[0].user_name
+  }
+}
+
+# --- Container Insights (CloudWatch agent add-on, IRSA) ----------------------
+
+locals {
+  cloudwatch_agent_namespace       = "amazon-cloudwatch"
+  cloudwatch_agent_service_account = "cloudwatch-agent"
+}
+
+data "aws_iam_policy_document" "cloudwatch_agent_trust" {
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -94,7 +194,7 @@ data "aws_iam_policy_document" "adot_trust" {
     condition {
       test     = "StringEquals"
       variable = "${replace(var.oidc_provider_url, "https://", "")}:sub"
-      values   = ["system:serviceaccount:${local.adot_namespace}:${local.adot_service_account}"]
+      values   = ["system:serviceaccount:${local.cloudwatch_agent_namespace}:${local.cloudwatch_agent_service_account}"]
     }
 
     condition {
@@ -105,50 +205,18 @@ data "aws_iam_policy_document" "adot_trust" {
   }
 }
 
-resource "aws_iam_role" "adot" {
-  name               = "${var.name_prefix}-adot-collector"
-  assume_role_policy = data.aws_iam_policy_document.adot_trust.json
+resource "aws_iam_role" "cloudwatch_agent" {
+  name               = "${var.name_prefix}-cloudwatch-agent"
+  assume_role_policy = data.aws_iam_policy_document.cloudwatch_agent_trust.json
   tags               = var.tags
 }
 
-# The only wildcard is the log-stream suffix of the Container Insights log
-# group (one stream per node).
-# tfsec:ignore:aws-iam-no-policy-wildcards
-resource "aws_iam_role_policy" "adot_remote_write" {
-  name = "amp-remote-write"
-  role = aws_iam_role.adot.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "RemoteWriteToAMP"
-        Effect = "Allow"
-        Action = [
-          "aps:RemoteWrite",
-          "aps:GetSeries",
-          "aps:GetLabels",
-          "aps:GetMetricMetadata",
-        ]
-        Resource = aws_prometheus_workspace.this.arn
-      },
-      {
-        # Container Insights metrics (node_cpu_utilization etc. - what the
-        # node alarms below evaluate) are published as EMF log events.
-        Sid    = "PublishContainerInsights"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogStreams",
-        ]
-        Resource = "${aws_cloudwatch_log_group.container_insights.arn}:*"
-      },
-    ]
-  })
+resource "aws_iam_role_policy_attachment" "cloudwatch_agent" {
+  role       = aws_iam_role.cloudwatch_agent.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
 }
 
-# Created here rather than by the collector, so it gets the same KMS key and
+# Created here rather than by the agent, so it gets the same KMS key and
 # retention as every other platform log group.
 resource "aws_cloudwatch_log_group" "container_insights" {
   name              = "/aws/containerinsights/${var.cluster_name}/performance"
@@ -157,49 +225,29 @@ resource "aws_cloudwatch_log_group" "container_insights" {
   tags              = var.tags
 }
 
-resource "helm_release" "adot_collector" {
-  count = var.install_adot_collector ? 1 : 0
+resource "aws_eks_addon" "cloudwatch_observability" {
+  count = var.enable_metrics_collection ? 1 : 0
 
-  name       = "adot-collector"
-  namespace  = "kube-system" # Helm release metadata only; the chart deploys into local.adot_namespace
-  repository = "https://aws-observability.github.io/aws-otel-helm-charts"
-  chart      = "adot-exporter-for-eks-on-ec2"
-  version    = var.adot_chart_version
+  cluster_name                = var.cluster_name
+  addon_name                  = "amazon-cloudwatch-observability"
+  service_account_role_arn    = aws_iam_role.cloudwatch_agent.arn
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
 
-  values = [yamlencode({
-    awsRegion   = data.aws_region.current.name
-    clusterName = var.cluster_name
-    adotCollector = {
-      daemonSet = {
-        namespace = local.adot_namespace
-        serviceAccount = {
-          name = local.adot_service_account
-          annotations = {
-            "eks.amazonaws.com/role-arn" = aws_iam_role.adot.arn
-          }
-        }
-        # A node-level collector has to run on every node, including the
-        # tainted system node group.
-        tolerations = [{ operator = "Exists" }]
-        cwreceivers = {
-          collectionInterval    = "60s"
-          containerOrchestrator = "eks"
-        }
-        ampexporters = {
-          endpoint = "${aws_prometheus_workspace.this.prometheus_endpoint}api/v1/remote_write"
-        }
-        service = {
-          metrics = {
-            receivers  = ["awscontainerinsightreceiver", "prometheus"]
-            processors = ["batch/metrics"]
-            exporters  = ["awsemf", "prometheusremotewrite"]
-          }
-        }
-      }
-    }
-  })]
+  configuration_values = jsonencode({
+    # Metrics only. Shipping every container's stdout to CloudWatch Logs is a
+    # separate cost decision, off by default.
+    containerLogs = { enabled = false }
+    # The agent is per-node, so it has to run on the tainted system nodes too.
+    tolerations = [{ operator = "Exists" }]
+  })
 
-  depends_on = [aws_cloudwatch_log_group.container_insights]
+  tags = var.tags
+
+  depends_on = [
+    aws_iam_role_policy_attachment.cloudwatch_agent,
+    aws_cloudwatch_log_group.container_insights,
+  ]
 }
 
 # ---------------------------------------------------------------------------
