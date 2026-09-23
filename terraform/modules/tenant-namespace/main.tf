@@ -16,6 +16,12 @@ locals {
   service_account_name = var.service_name
 }
 
+# The unversioned kubernetes_* types are deprecated in provider 3 in favour of
+# identical *_v1 types, but still fully supported. They're kept deliberately:
+# the provider can't move state across types (verified live - `moved` fails with
+# "Move Resource State Not Supported"), so switching would destroy and recreate
+# every tenant's namespace and everything in it, or need per-resource import
+# blocks in each environment root.
 resource "kubernetes_namespace" "this" {
   metadata {
     name = local.namespace
