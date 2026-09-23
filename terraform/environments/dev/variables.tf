@@ -5,11 +5,23 @@ variable "aws_region" {
 
 variable "kubernetes_version" {
   type    = string
-  default = "1.31"
+  default = "1.35"
 }
 
 variable "platform_admin_principal_arns" {
   description = "IAM principals (platform team) granted cluster-admin EKS access."
+  type        = list(string)
+  default     = []
+}
+
+variable "cluster_viewer_principal_arns" {
+  description = "IAM principals granted cluster-wide read-only EKS access - set to the bootstrap plan role so CI plans and drift checks can refresh in-cluster resources."
+  type        = list(string)
+  default     = []
+}
+
+variable "eks_public_access_cidrs" {
+  description = "CIDRs allowed to reach the EKS API's public endpoint. Empty (the default) keeps the endpoint private-only."
   type        = list(string)
   default     = []
 }

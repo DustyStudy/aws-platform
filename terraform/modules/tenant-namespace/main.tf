@@ -88,12 +88,24 @@ resource "kubernetes_network_policy" "allow_same_namespace" {
     namespace = kubernetes_namespace.this.metadata[0].name
   }
 
+  # Both directions: default_deny covers egress too, so allowing only ingress
+  # would still stop a service's pods from calling each other.
   spec {
     pod_selector {}
-    policy_types = ["Ingress"]
+    policy_types = ["Ingress", "Egress"]
 
     ingress {
       from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = local.namespace
+          }
+        }
+      }
+    }
+
+    egress {
+      to {
         namespace_selector {
           match_labels = {
             "kubernetes.io/metadata.name" = local.namespace

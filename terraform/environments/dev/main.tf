@@ -106,6 +106,13 @@ module "eks" {
   karpenter_cpu_limit = "20"
 
   platform_admin_principal_arns = var.platform_admin_principal_arns
+  cluster_viewer_principal_arns = var.cluster_viewer_principal_arns
+
+  # Private-only unless an allowlist is supplied. Whatever runs terraform
+  # (CI runner or operator) must reach the API server to manage the in-cluster
+  # layer - see docs/ARCHITECTURE.md#reaching-the-private-api-endpoint.
+  endpoint_public_access = length(var.eks_public_access_cidrs) > 0
+  public_access_cidrs    = var.eks_public_access_cidrs
 
   tags = local.common_tags
 }
@@ -140,12 +147,12 @@ module "tenant" {
 
   team_name               = each.value.team_name
   service_name            = each.value.service_name
-  team_iam_principal_arns = try(each.value.team_iam_principal_arns, [])
+  team_iam_principal_arns = each.value.team_iam_principal_arns
 
-  quota_cpu_requests    = try(each.value.quota_cpu_requests, "2")
-  quota_cpu_limits      = try(each.value.quota_cpu_limits, "4")
-  quota_memory_requests = try(each.value.quota_memory_requests, "4Gi")
-  quota_memory_limits   = try(each.value.quota_memory_limits, "8Gi")
+  quota_cpu_requests    = coalesce(each.value.quota_cpu_requests, "2")
+  quota_cpu_limits      = coalesce(each.value.quota_cpu_limits, "4")
+  quota_memory_requests = coalesce(each.value.quota_memory_requests, "4Gi")
+  quota_memory_limits   = coalesce(each.value.quota_memory_limits, "8Gi")
 
   tags = local.common_tags
 }
