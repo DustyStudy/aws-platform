@@ -116,6 +116,13 @@ resource "aws_prometheus_scraper" "this" {
   })
 
   tags = var.tags
+
+  # Measured live: creating a scraper took ~15m and deleting one over 20m -
+  # past the provider's 20m default, which failed the teardown.
+  timeouts {
+    create = "30m"
+    delete = "45m"
+  }
 }
 
 # No access entry or RBAC here: creating the scraper makes AMP add an access

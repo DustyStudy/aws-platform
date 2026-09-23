@@ -129,7 +129,7 @@ the GitHub Environment settings the apply role depends on.
 **Tested live.** The whole stack - bootstrap, the dev environment through the
 CI roles, and the hybrid-networking modules - was deployed into a real AWS
 Organizations member account, verified, and torn down on 2026-09-23. What was
-checked, the 22 defects that turned up and how each was fixed, and the
+checked, the 24 defects that turned up and how each was fixed, and the
 evidence are in [`docs/LIVE-VALIDATION.md`](docs/LIVE-VALIDATION.md). Nothing
 is left running: the repo's CI variables are unset, so its workflows skip their
 AWS jobs until someone bootstraps their own account.
