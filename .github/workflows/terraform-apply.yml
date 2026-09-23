@@ -81,7 +81,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -input=false
-      - run: terraform apply -input=false -auto-approve
+      - run: terraform apply -input=false -lock-timeout=15m -auto-approve
 
   apply-prod:
     if: vars.APPLY_ROLE_ARN != '' && github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
@@ -138,7 +138,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -input=false
-      - run: terraform apply -input=false -auto-approve
+      - run: terraform apply -input=false -lock-timeout=15m -auto-approve
 
       # Close the loop: the change record shows what actually happened, without
       # anyone copy-pasting. Best-effort - a note failing must not fail a

@@ -120,6 +120,9 @@ jobs:
       (needs.detect-changes.outputs.dev == 'true' || needs.detect-changes.outputs.prod == 'true')
     runs-on: ubuntu-latest
     strategy:
+      # One environment's failure shouldn't cancel the other's plan - a
+      # reviewer needs both results.
+      fail-fast: false
       matrix:
         environment: [dev, prod]
     defaults:
@@ -158,7 +161,8 @@ jobs:
 
       - name: Terraform plan
         id: plan
-        run: terraform plan -input=false -no-color -out=tfplan.binary
+        # Wait out an in-progress apply's state lock instead of failing on it.
+        run: terraform plan -input=false -no-color -lock-timeout=15m -out=tfplan.binary
         continue-on-error: true
 
       - name: Save plan text for PR comment

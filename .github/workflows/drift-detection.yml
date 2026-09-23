@@ -63,7 +63,7 @@ jobs:
 
       - name: Plan (detect drift)
         id: plan
-        run: terraform plan -input=false -no-color -detailed-exitcode -out=tfplan.binary
+        run: terraform plan -input=false -no-color -lock-timeout=15m -detailed-exitcode -out=tfplan.binary
         continue-on-error: true
 
       - name: Save plan text
