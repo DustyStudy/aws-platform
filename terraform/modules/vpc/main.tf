@@ -198,6 +198,9 @@ resource "aws_iam_role" "flow_logs" {
   })
 }
 
+# The only wildcard is the log-stream suffix of this one log group's ARN -
+# flow logs create a stream per ENI.
+# tfsec:ignore:aws-iam-no-policy-wildcards
 resource "aws_iam_role_policy" "flow_logs" {
   name = "publish-to-cloudwatch"
   role = aws_iam_role.flow_logs.id

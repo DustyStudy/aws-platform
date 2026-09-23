@@ -78,6 +78,9 @@ jobs:
           done
       - name: Change gate unit tests
         run: python3 -m unittest scripts/test_change_gate.py -v
+      - name: Policy unit tests (conftest verify)
+        run: |
+          docker run --rm -v "$PWD/policy/conftest":/policy             openpolicyagent/conftest verify -p /policy
 
   security-scan:
     runs-on: ubuntu-latest
@@ -86,9 +89,11 @@ jobs:
 
       - name: tfsec
         uses: aquasecurity/tfsec-action@b466648d6e39e7c75324f25d83891162a721f2d6 # v1.0.3
+        # No soft_fail input at all: the action passes --soft-fail whenever the
+        # input is non-empty, so even `soft_fail: false` silently disabled the
+        # gate. Omitted, a real finding fails the job and blocks the PR.
         with:
           working_directory: terraform
-          soft_fail: false # a real finding blocks the PR, not just a comment
 
       - name: Checkov
         uses: bridgecrewio/checkov-action@444c9db6fa75e2d9c19ebf1fde7322089be9009e # v12
@@ -122,6 +127,9 @@ jobs:
         working-directory: terraform/environments/${{ matrix.environment }}
     env:
       TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+      TF_VAR_platform_admin_principal_arns: ${{ vars.PLATFORM_ADMIN_ARNS || '[]' }}
+      TF_VAR_cluster_viewer_principal_arns: ${{ format('["{0}"]', vars.PLAN_ROLE_ARN) }}
+      TF_VAR_eks_public_access_cidrs: ${{ vars.EKS_PUBLIC_ACCESS_CIDRS || '[]' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
