@@ -1,0 +1,5 @@
+apiVersion: v2
+name: karpenter-defaults
+description: The platform's default Karpenter EC2NodeClass and NodePool.
+type: application
+version: 0.1.0
