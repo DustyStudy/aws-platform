@@ -5,6 +5,8 @@
 *.tfplan
 *.tfplan.*
 tfplan.binary
+tfplan
+destroy.tfplan
 tfplan.txt
 plan.json
 crash.log
@@ -23,3 +25,10 @@ override.tf.json
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Local-only variable overrides (account-specific ARNs, CIDRs)
+live.auto.tfvars.json
