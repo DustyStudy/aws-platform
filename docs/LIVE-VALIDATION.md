@@ -146,7 +146,8 @@ nothing, to show that a first apply works in one pass with no manual steps:
 | `terraform apply` from empty state | `Apply complete! Resources: 106 added, 0 changed, 0 destroyed.` - first attempt, no errors |
 | Smoke test | 4 add-ons `ACTIVE`, no pod outside `Running`, Karpenter provisioned spot `c7a.medium` nodes for a test deployment, tenant quotas carrying CPU/memory limits |
 | CI against it | PR plan (dev + prod) and Drift Detection green |
-| `terraform destroy` with 3 Karpenter nodes and a workload still running, no manual drain or finalizer edits | CLEANROOM_DESTROY_PLACEHOLDER |
+| `terraform destroy` with Karpenter nodes and a workload still running, no manual drain or finalizer edits | First two attempts exposed defects 22-24 (egress removed too early, then only partly kept; scraper delete timeout) - each fixed and the environment rebuilt. Final attempt: `106 destroyed`. Tenant namespaces gone in 7s, `karpenter-defaults` in 36s (vs 5m timeouts before), egress removed only after the cluster, scraper deleted in 11m within its new timeout |
+| Manual cleanup in that final attempt | One orphaned VPC CNI ENI (`aws-K8S-i-...`) and the `eks-cluster-sg-*` it pinned. The un-drained test workload made Karpenter launch a replacement node mid-teardown, and that node was terminated while the CNI was still attaching an ENI - an upstream race. The documented drain step (delete the `NodePool` first) avoids it; the earlier teardown that used it leaked nothing. Recovery steps added to [ARCHITECTURE.md](ARCHITECTURE.md#tearing-an-environment-down) |
 
 ## Not covered live
 

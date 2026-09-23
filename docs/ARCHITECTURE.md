@@ -157,3 +157,15 @@ kubectl delete nodepool default
 kubectl wait --for=delete nodeclaims --all --timeout=10m
 terraform destroy
 ```
+
+Skipping the drain mostly works: the module orders its own teardown so that
+Karpenter keeps its IAM, pod networking and NAT egress until it has removed
+its nodes. But workloads that are still running get rescheduled onto fresh
+nodes while Karpenter is removing the old ones, and a node killed mid-boot can
+orphan a VPC CNI secondary ENI (an upstream race). If `terraform destroy`
+hangs on a private subnet, look for `aws-K8S-i-*` ENIs in the VPC and for a
+leftover `eks-cluster-sg-*` security group:
+
+```bash
+aws ec2 describe-network-interfaces --filters Name=vpc-id,Values=<vpc-id>   --query 'NetworkInterfaces[?starts_with(Description, `aws-K8S-`)].NetworkInterfaceId'
+```
