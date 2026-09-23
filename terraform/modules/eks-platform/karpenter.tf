@@ -273,8 +273,17 @@ resource "helm_release" "karpenter" {
   })]
 
   # CoreDNS has to be schedulable before the controller can resolve AWS
-  # endpoints - see aws_eks_addon.coredns.
-  depends_on = [aws_eks_node_group.system, aws_eks_addon.coredns]
+  # endpoints - see aws_eks_addon.coredns. The rest matters on destroy: the
+  # controller has to outlive its IAM permissions and pod networking, because
+  # removing karpenter-defaults waits on its EC2NodeClass finalizer, which only
+  # a working controller can clear.
+  depends_on = [
+    aws_eks_node_group.system,
+    aws_eks_addon.coredns,
+    aws_eks_addon.vpc_cni,
+    aws_eks_addon.kube_proxy,
+    aws_iam_role_policy.karpenter_controller,
+  ]
 }
 
 # --- Default provisioning shape ------------------------------------------

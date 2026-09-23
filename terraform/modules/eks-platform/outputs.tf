@@ -1,5 +1,15 @@
 output "cluster_name" {
   value = aws_eks_cluster.this.name
+
+  # Everything in-cluster (tenant namespaces, providers, add-ons downstream)
+  # reads this output, so this orders their destroy before the networking
+  # add-ons'. The VPC CNI's network policy components clear a finalizer on
+  # every NetworkPolicy; removed first, tenant namespaces never finish deleting.
+  depends_on = [
+    aws_eks_addon.vpc_cni,
+    aws_eks_addon.kube_proxy,
+    aws_eks_addon.coredns,
+  ]
 }
 
 output "cluster_endpoint" {
