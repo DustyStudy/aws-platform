@@ -42,6 +42,9 @@ jobs:
         working-directory: terraform/environments/${{ matrix.environment }}
     env:
       TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+      TF_VAR_platform_admin_principal_arns: ${{ vars.PLATFORM_ADMIN_ARNS || '[]' }}
+      TF_VAR_cluster_viewer_principal_arns: ${{ format('["{0}"]', vars.PLAN_ROLE_ARN) }}
+      TF_VAR_eks_public_access_cidrs: ${{ vars.EKS_PUBLIC_ACCESS_CIDRS || '[]' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 

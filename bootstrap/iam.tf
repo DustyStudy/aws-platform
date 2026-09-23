@@ -98,13 +98,27 @@ data "aws_iam_policy_document" "plan_permissions" {
       "iam:GetPolicyVersion",
       "iam:GetOpenIDConnectProvider",
       "iam:ListOpenIDConnectProviders",
+      "iam:GetInstanceProfile",
       "kms:DescribeKey",
       "kms:ListAliases",
+      "kms:GetKeyPolicy",
+      "kms:GetKeyRotationStatus",
+      "kms:ListResourceTags",
       "logs:Describe*",
+      "logs:ListTagsForResource",
+      "logs:ListTagsLogGroup",
       "s3:GetBucket*",
       "s3:ListBucket",
       "sns:GetTopicAttributes",
+      "sns:GetSubscriptionAttributes",
       "sns:ListTopics",
+      "sns:ListTagsForResource",
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueueTags",
+      "events:Describe*",
+      "events:List*",
+      "cloudwatch:DescribeAlarms",
+      "cloudwatch:ListTagsForResource",
       "aps:Describe*",
       "aps:List*",
       "grafana:Describe*",
@@ -127,6 +141,16 @@ data "aws_iam_policy_document" "plan_permissions" {
     effect    = "Allow"
     actions   = ["s3:GetObject"]
     resources = [for b in aws_s3_bucket.tfstate : "${b.arn}/*"]
+  }
+
+  # terraform plan takes the native S3 state lock (use_lockfile = true), which
+  # writes and deletes a <key>.tflock object. Only lock objects - the plan role
+  # still can't write the state itself.
+  statement {
+    sid       = "StateLock"
+    effect    = "Allow"
+    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    resources = [for b in aws_s3_bucket.tfstate : "${b.arn}/*.tflock"]
   }
 
   statement {
@@ -215,24 +239,35 @@ data "aws_iam_policy_document" "apply_permissions" {
       "eks:CreateCluster", "eks:DeleteCluster", "eks:UpdateClusterConfig", "eks:UpdateClusterVersion",
       "eks:CreateNodegroup", "eks:DeleteNodegroup", "eks:UpdateNodegroupConfig", "eks:UpdateNodegroupVersion",
       "eks:CreateAccessEntry", "eks:DeleteAccessEntry", "eks:AssociateAccessPolicy", "eks:DisassociateAccessPolicy",
+      "eks:CreateAddon", "eks:DeleteAddon", "eks:UpdateAddon", "eks:UpdateAccessEntry",
       "eks:TagResource", "eks:UntagResource",
       "eks:Describe*", "eks:List*",
       # ECR: tenant repositories
       "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:PutLifecyclePolicy", "ecr:DeleteLifecyclePolicy", "ecr:PutImageScanningConfiguration",
-      "ecr:TagResource", "ecr:Describe*",
+      "ecr:GetLifecyclePolicy", "ecr:ListTagsForResource", "ecr:TagResource", "ecr:UntagResource", "ecr:Describe*",
       # Karpenter's interruption-handling plumbing
-      "sqs:CreateQueue", "sqs:DeleteQueue", "sqs:SetQueueAttributes", "sqs:TagQueue", "sqs:GetQueueAttributes",
+      "sqs:CreateQueue", "sqs:DeleteQueue", "sqs:SetQueueAttributes", "sqs:TagQueue", "sqs:UntagQueue",
+      "sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:ListQueueTags",
       "events:PutRule", "events:DeleteRule", "events:PutTargets", "events:RemoveTargets", "events:DescribeRule",
+      "events:ListTargetsByRule", "events:ListTagsForResource", "events:TagResource", "events:UntagResource",
       # Logs: log groups + the metric filters observability defines
-      "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:AssociateKmsKey", "logs:TagResource",
+      "logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:PutRetentionPolicy", "logs:DeleteRetentionPolicy",
+      "logs:AssociateKmsKey", "logs:DisassociateKmsKey",
+      "logs:TagResource", "logs:UntagResource", "logs:TagLogGroup", "logs:ListTagsForResource", "logs:ListTagsLogGroup",
       "logs:PutMetricFilter", "logs:DeleteMetricFilter",
       "logs:Describe*",
+      # AMP's logging_configuration delivers through CloudWatch Logs vended logs
+      "logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery", "logs:ListLogDeliveries",
+      "logs:PutResourcePolicy",
       # Alerting + cross-service observability
-      "sns:CreateTopic", "sns:DeleteTopic", "sns:SetTopicAttributes", "sns:Subscribe", "sns:Unsubscribe", "sns:TagResource",
+      "sns:CreateTopic", "sns:DeleteTopic", "sns:SetTopicAttributes", "sns:GetTopicAttributes", "sns:Subscribe", "sns:Unsubscribe",
+      "sns:GetSubscriptionAttributes", "sns:SetSubscriptionAttributes", "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource",
       "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms",
-      "aps:CreateWorkspace", "aps:DeleteWorkspace", "aps:UpdateWorkspaceAlias", "aps:TagResource",
+      "cloudwatch:ListTagsForResource", "cloudwatch:TagResource", "cloudwatch:UntagResource",
+      "aps:CreateWorkspace", "aps:DeleteWorkspace", "aps:UpdateWorkspaceAlias", "aps:TagResource", "aps:UntagResource", "aps:ListTagsForResource",
       "aps:CreateLoggingConfiguration", "aps:UpdateLoggingConfiguration", "aps:DeleteLoggingConfiguration", "aps:Describe*",
-      "grafana:CreateWorkspace", "grafana:DeleteWorkspace", "grafana:UpdateWorkspaceConfiguration", "grafana:TagResource", "grafana:Describe*",
+      "grafana:CreateWorkspace", "grafana:DeleteWorkspace", "grafana:UpdateWorkspace", "grafana:UpdateWorkspaceConfiguration",
+      "grafana:TagResource", "grafana:UntagResource", "grafana:ListTagsForResource", "grafana:Describe*",
     ]
     resources = ["*"]
     condition {
@@ -260,9 +295,13 @@ data "aws_iam_policy_document" "apply_permissions" {
       "iam:ListAttachedRolePolicies",
       "iam:AttachRolePolicy",
       "iam:DetachRolePolicy",
+      "iam:ListInstanceProfilesForRole",
       "iam:CreateOpenIDConnectProvider",
       "iam:GetOpenIDConnectProvider",
-      "iam:CreateServiceLinkedRole",
+      "iam:DeleteOpenIDConnectProvider",
+      "iam:TagOpenIDConnectProvider",
+      "iam:UntagOpenIDConnectProvider",
+      "iam:UpdateOpenIDConnectProviderThumbprint",
       "iam:PassRole",
     ]
     resources = [
@@ -275,6 +314,28 @@ data "aws_iam_policy_document" "apply_permissions" {
     ]
   }
 
+  # A fresh account has none of the service-linked roles EKS, managed node
+  # groups, Auto Scaling and Spot need; the first cluster create makes them.
+  # Scoped to exactly those services - not iam:CreateServiceLinkedRole on *.
+  statement {
+    sid       = "CreatePlatformServiceLinkedRoles"
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["arn:aws:iam::${local.account_id}:role/aws-service-role/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values = [
+        "eks.amazonaws.com",
+        "eks-nodegroup.amazonaws.com",
+        "autoscaling.amazonaws.com",
+        "spot.amazonaws.com",
+        "elasticloadbalancing.amazonaws.com",
+        "grafana.amazonaws.com",
+      ]
+    }
+  }
+
   statement {
     sid    = "ManageKarpenterNodeInstanceProfile"
     effect = "Allow"
@@ -285,6 +346,7 @@ data "aws_iam_policy_document" "apply_permissions" {
       "iam:RemoveRoleFromInstanceProfile",
       "iam:GetInstanceProfile",
       "iam:TagInstanceProfile",
+      "iam:UntagInstanceProfile",
     ]
     resources = ["arn:aws:iam::${local.account_id}:instance-profile/platform-*"]
   }
@@ -302,11 +364,30 @@ data "aws_iam_policy_document" "apply_permissions" {
       "kms:PutKeyPolicy",
       "kms:ScheduleKeyDeletion",
       "kms:TagResource",
+      "kms:UntagResource",
       "kms:ListAliases",
+      "kms:GetKeyRotationStatus",
+      "kms:ListResourceTags",
+      "kms:ListGrants",
       "kms:Decrypt",
       "kms:GenerateDataKey",
     ]
     resources = ["*"]
+  }
+
+  # EKS secrets encryption and KMS-encrypted ECR repos both create a grant on
+  # the key as the calling principal. Only grants AWS services use on our
+  # behalf - not arbitrary grants to other principals.
+  statement {
+    sid       = "GrantKeysToAWSServices"
+    effect    = "Allow"
+    actions   = ["kms:CreateGrant"]
+    resources = ["*"]
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
   }
 
   statement {

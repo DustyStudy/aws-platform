@@ -44,7 +44,7 @@ jobs:
       - name: Checkout aws-platform
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: your-github-org/aws-platform
+          repository: DustyStudy/aws-platform
           token: ${{ secrets.PLATFORM_REPO_TOKEN }}
 
       - name: Add/update team entry
