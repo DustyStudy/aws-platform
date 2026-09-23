@@ -170,11 +170,18 @@ data "aws_iam_policy_document" "karpenter_controller_permissions" {
   # The EC2NodeClass references the instance profile below by name, so
   # Karpenter never has to create or modify instance profiles itself - it
   # only needs to read the one it was given.
+  # Also the <cluster>_<hash> name Karpenter would generate itself: on
+  # EC2NodeClass deletion it checks for (and would clean up) that profile even
+  # when the NodeClass names an existing one, and a 403 there leaves the
+  # NodeClass stuck terminating.
   statement {
-    sid       = "AllowInstanceProfileRead"
-    effect    = "Allow"
-    actions   = ["iam:GetInstanceProfile"]
-    resources = [aws_iam_instance_profile.karpenter_node.arn]
+    sid     = "AllowInstanceProfileRead"
+    effect  = "Allow"
+    actions = ["iam:GetInstanceProfile"]
+    resources = [
+      aws_iam_instance_profile.karpenter_node.arn,
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/${var.cluster_name}_*",
+    ]
   }
 
   statement {
