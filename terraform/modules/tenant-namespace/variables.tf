@@ -52,28 +52,43 @@ variable "team_iam_principal_arns" {
 # them without a platform-team review.
 
 variable "quota_cpu_requests" {
-  type    = string
-  default = "4"
+  type = string
+  # null (an unset optional attribute from the caller) means "use the
+  # default", not "no limit" - a null hard entry is silently dropped.
+  nullable = false
+  default  = "4"
 }
 
 variable "quota_cpu_limits" {
-  type    = string
-  default = "8"
+  type = string
+  # null (an unset optional attribute from the caller) means "use the
+  # default", not "no limit" - a null hard entry is silently dropped.
+  nullable = false
+  default  = "8"
 }
 
 variable "quota_memory_requests" {
-  type    = string
-  default = "8Gi"
+  type = string
+  # null (an unset optional attribute from the caller) means "use the
+  # default", not "no limit" - a null hard entry is silently dropped.
+  nullable = false
+  default  = "8Gi"
 }
 
 variable "quota_memory_limits" {
-  type    = string
-  default = "16Gi"
+  type = string
+  # null (an unset optional attribute from the caller) means "use the
+  # default", not "no limit" - a null hard entry is silently dropped.
+  nullable = false
+  default  = "16Gi"
 }
 
 variable "quota_max_pods" {
-  type    = string
-  default = "20"
+  type = string
+  # null (an unset optional attribute from the caller) means "use the
+  # default", not "no limit" - a null hard entry is silently dropped.
+  nullable = false
+  default  = "20"
 }
 
 variable "default_container_cpu_request" {
