@@ -1,0 +1,8 @@
+# All values are supplied by terraform/modules/eks-platform/karpenter.tf.
+clusterName: ""
+instanceProfile: ""
+securityGroupId: ""
+cpuLimit: "100"
+consolidationPolicy: WhenEmptyOrUnderutilized
+consolidateAfter: 5m
+tags: {}

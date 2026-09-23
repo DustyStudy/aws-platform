@@ -43,6 +43,16 @@ resource "aws_cloudwatch_event_rule" "instance_state_change" {
   event_pattern = jsonencode({ source = ["aws.ec2"], "detail-type" = ["EC2 Instance State-change Notification"] })
 }
 
+resource "aws_cloudwatch_event_rule" "scheduled_change" {
+  name          = "${var.cluster_name}-karpenter-scheduled-change"
+  event_pattern = jsonencode({ source = ["aws.health"], "detail-type" = ["AWS Health Event"] })
+}
+
+resource "aws_cloudwatch_event_target" "scheduled_change" {
+  rule = aws_cloudwatch_event_rule.scheduled_change.name
+  arn  = aws_sqs_queue.karpenter_interruption.arn
+}
+
 resource "aws_cloudwatch_event_target" "spot_interruption" {
   rule = aws_cloudwatch_event_rule.spot_interruption.name
   arn  = aws_sqs_queue.karpenter_interruption.arn
@@ -102,6 +112,11 @@ resource "aws_iam_role" "karpenter_controller" {
 # existing resources.
 # checkov:skip=CKV_AWS_108: no data-plane read/exfiltration actions here -
 # EC2 fleet management and read-only pricing/SSM lookups only.
+# RunInstances/CreateFleet/CreateLaunchTemplate act on resources that don't
+# exist yet, Terminate is conditioned on the cluster's ownership tag, and
+# Describe*/pricing/ListInstanceProfiles are read-only "*"-only APIs - the
+# same shape as Karpenter's published policy.
+# tfsec:ignore:aws-iam-no-policy-wildcards
 data "aws_iam_policy_document" "karpenter_controller_permissions" {
   statement {
     sid    = "AllowScopedEC2InstanceActions"
@@ -111,9 +126,23 @@ data "aws_iam_policy_document" "karpenter_controller_permissions" {
       "ec2:CreateFleet",
       "ec2:CreateLaunchTemplate",
       "ec2:CreateTags",
-      "ec2:TerminateInstances",
     ]
     resources = ["*"]
+  }
+
+  # Karpenter only terminates instances / deletes launch templates it tagged as
+  # belonging to this cluster - not any instance in the account.
+  statement {
+    sid       = "AllowScopedDeletion"
+    effect    = "Allow"
+    actions   = ["ec2:TerminateInstances", "ec2:DeleteLaunchTemplate"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/kubernetes.io/cluster/${var.cluster_name}"
+      values   = ["owned"]
+    }
   }
 
   statement {
@@ -126,7 +155,32 @@ data "aws_iam_policy_document" "karpenter_controller_permissions" {
   statement {
     sid       = "AllowPricingReadOnly"
     effect    = "Allow"
-    actions   = ["pricing:GetProducts", "ssm:GetParameter"]
+    actions   = ["pricing:GetProducts"]
+    resources = ["*"]
+  }
+
+  # AMI resolution for the al2023@latest alias - AWS's public parameters only.
+  statement {
+    sid       = "AllowAMIParameterRead"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${data.aws_region.current.name}::parameter/aws/service/*"]
+  }
+
+  # The EC2NodeClass references the instance profile below by name, so
+  # Karpenter never has to create or modify instance profiles itself - it
+  # only needs to read the one it was given.
+  statement {
+    sid       = "AllowInstanceProfileRead"
+    effect    = "Allow"
+    actions   = ["iam:GetInstanceProfile"]
+    resources = [aws_iam_instance_profile.karpenter_node.arn]
+  }
+
+  statement {
+    sid       = "AllowInstanceProfileList"
+    effect    = "Allow"
+    actions   = ["iam:ListInstanceProfiles"]
     resources = ["*"]
   }
 
@@ -135,6 +189,27 @@ data "aws_iam_policy_document" "karpenter_controller_permissions" {
     effect    = "Allow"
     actions   = ["iam:PassRole"]
     resources = [aws_iam_role.node.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ec2.amazonaws.com"]
+    }
+  }
+
+  # Karpenter launches spot capacity; the Spot service-linked role has to
+  # exist first, and in a fresh account nothing else creates it.
+  statement {
+    sid       = "AllowSpotServiceLinkedRole"
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values   = ["spot.amazonaws.com"]
+    }
   }
 
   statement {
@@ -192,64 +267,38 @@ resource "helm_release" "karpenter" {
     nodeSelector = {
       "platform-system" = "true"
     }
+    # The chart spreads replicas one per node, and they can only run on the
+    # system node group - more replicas than system nodes leaves one Pending.
+    replicas = min(2, var.system_node_min_size)
   })]
 
-  depends_on = [aws_eks_node_group.system]
+  # CoreDNS has to be schedulable before the controller can resolve AWS
+  # endpoints - see aws_eks_addon.coredns.
+  depends_on = [aws_eks_node_group.system, aws_eks_addon.coredns]
 }
 
 # --- Default provisioning shape ------------------------------------------
-# EC2NodeClass / NodePool are Karpenter's own CRDs, applied once the chart
-# (and its CRDs) exist. Kept minimal on purpose: on-demand + spot, generic
-# instance families, scoped to subnets/security groups tagged for discovery
-# by the vpc module.
+# EC2NodeClass / NodePool are Karpenter's own CRDs. They're installed through
+# a small local chart rather than kubernetes_manifest: kubernetes_manifest
+# needs a reachable API server with the CRDs already registered at *plan*
+# time, so a fresh environment's first plan fails before the cluster exists.
+# Kept minimal on purpose: on-demand + spot, generic instance families, the
+# cluster's own subnets and security group.
 
-resource "kubernetes_manifest" "karpenter_node_class" {
-  manifest = {
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata   = { name = "default" }
-    spec = {
-      amiFamily = "AL2023"
-      role      = aws_iam_role.node.name
-      subnetSelectorTerms = [{
-        tags = { "karpenter.sh/discovery" = var.cluster_name }
-      }]
-      securityGroupSelectorTerms = [{
-        tags = { "kubernetes.io/cluster/${var.cluster_name}" = "shared" }
-      }]
-      tags = var.tags
-    }
-  }
+resource "helm_release" "karpenter_defaults" {
+  name      = "karpenter-defaults"
+  namespace = "kube-system"
+  chart     = "${path.module}/charts/karpenter-defaults"
+
+  values = [yamlencode({
+    clusterName         = var.cluster_name
+    instanceProfile     = aws_iam_instance_profile.karpenter_node.name
+    securityGroupId     = aws_eks_cluster.this.vpc_config[0].cluster_security_group_id
+    cpuLimit            = var.karpenter_cpu_limit
+    tags                = var.tags
+    consolidateAfter    = "5m"
+    consolidationPolicy = "WhenEmptyOrUnderutilized"
+  })]
 
   depends_on = [helm_release.karpenter]
-}
-
-resource "kubernetes_manifest" "karpenter_node_pool" {
-  manifest = {
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata   = { name = "default" }
-    spec = {
-      template = {
-        spec = {
-          nodeClassRef = { group = "karpenter.k8s.aws", kind = "EC2NodeClass", name = "default" }
-          requirements = [
-            { key = "kubernetes.io/arch", operator = "In", values = ["amd64"] },
-            { key = "karpenter.sh/capacity-type", operator = "In", values = ["on-demand", "spot"] },
-            { key = "karpenter.k8s.aws/instance-category", operator = "In", values = ["m", "c", "r"] },
-            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["4"] },
-          ]
-        }
-      }
-      limits = {
-        cpu = var.karpenter_cpu_limit
-      }
-      disruption = {
-        consolidationPolicy = "WhenEmptyOrUnderutilized"
-        consolidateAfter    = "5m"
-      }
-    }
-  }
-
-  depends_on = [kubernetes_manifest.karpenter_node_class]
 }

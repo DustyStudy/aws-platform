@@ -69,13 +69,14 @@ resource "aws_iam_role_policy_attachment" "cluster" {
 resource "aws_security_group" "cluster" {
   name_prefix = "${var.cluster_name}-cluster-"
   vpc_id      = var.vpc_id
-  description = "EKS control plane <-> node communication"
+  description = "EKS control plane and node communication"
 
   # checkov:skip=CKV_AWS_382: the control plane and every node need outbound
   # HTTPS to AWS APIs (STS, ECR, EC2), the pod ENIs it manages, and whatever
   # ClusterIP/NodePort services route through it - there's no fixed CIDR/port
   # set to scope this to short of replicating the AWS-managed EKS SG's own
   # rule, which uses the same shape.
+  # tfsec:ignore:aws-ec2-no-public-egress-sgr: see the CKV_AWS_382 note above.
   egress {
     description = "All outbound - control plane needs AWS API + node/pod reachability, not a fixed CIDR/port set"
     from_port   = 0
@@ -96,6 +97,11 @@ resource "aws_eks_cluster" "this" {
   role_arn = aws_iam_role.cluster.arn
   version  = var.kubernetes_version
 
+  # checkov:skip=CKV_AWS_39: the public endpoint is off unless the caller
+  # opts in with endpoint_public_access, and a variable validation refuses
+  # that without an explicit public_access_cidrs allowlist.
+  # checkov:skip=CKV_AWS_38: same - the allowlist is the caller's, validated
+  # non-empty; an operator can scope it to runner/VPN egress IPs.
   vpc_config {
     subnet_ids              = var.private_subnet_ids
     security_group_ids      = [aws_security_group.cluster.id]
@@ -208,6 +214,59 @@ resource "aws_eks_node_group" "system" {
 }
 
 # ---------------------------------------------------------------------------
+# Core add-ons, managed by EKS instead of the self-managed copies a new cluster
+# starts with:
+#   - vpc-cni with the network policy agent enabled. Without it the VPC CNI
+#     accepts NetworkPolicy objects but never enforces them, so the tenant
+#     module's default-deny policies would be decoration.
+#   - coredns tolerating the system node taint. Every node the cluster starts
+#     with is tainted platform-system, and Karpenter (which launches the
+#     untainted capacity) needs DNS to reach AWS APIs - an untolerated CoreDNS
+#     would leave both waiting on each other forever.
+# ---------------------------------------------------------------------------
+
+resource "aws_eks_addon" "vpc_cni" {
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = "vpc-cni"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  configuration_values = jsonencode({
+    enableNetworkPolicy = "true"
+  })
+
+  tags = var.tags
+}
+
+resource "aws_eks_addon" "kube_proxy" {
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = "kube-proxy"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  tags = var.tags
+}
+
+resource "aws_eks_addon" "coredns" {
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = "coredns"
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  configuration_values = jsonencode({
+    tolerations = [
+      { key = "CriticalAddonsOnly", operator = "Exists" },
+      { key = "platform-system", operator = "Equal", value = "true", effect = "NoSchedule" },
+    ]
+  })
+
+  tags = var.tags
+
+  # CoreDNS only goes ACTIVE once its pods are running, which needs nodes.
+  depends_on = [aws_eks_node_group.system]
+}
+
+# ---------------------------------------------------------------------------
 # EKS access entries - human/team access is granted per-namespace via
 # access policy associations, not via cluster-admin kubeconfig sharing.
 # The bootstrap creator (CI's apply role) gets cluster-admin implicitly via
@@ -231,4 +290,30 @@ resource "aws_eks_access_policy_association" "platform_admins" {
   access_scope {
     type = "cluster"
   }
+
+  depends_on = [aws_eks_access_entry.platform_admins]
+}
+
+# Read-only principals (CI's plan/drift role). AmazonEKSAdminViewPolicy rather
+# than AmazonEKSViewPolicy because terraform plan refreshes helm releases, and
+# Helm stores release state in Secrets that the plain view policy can't read.
+resource "aws_eks_access_entry" "viewers" {
+  for_each = toset(var.cluster_viewer_principal_arns)
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = each.value
+}
+
+resource "aws_eks_access_policy_association" "viewers" {
+  for_each = toset(var.cluster_viewer_principal_arns)
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = each.value
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminViewPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.viewers]
 }
