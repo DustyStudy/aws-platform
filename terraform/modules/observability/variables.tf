@@ -14,16 +14,24 @@ variable "oidc_provider_url" {
   type = string
 }
 
-variable "install_adot_collector" {
-  description = "Install the ADOT collector via Helm to scrape and remote_write into AMP. Set false if the caller manages the collector separately."
-  type        = bool
-  default     = true
+variable "cluster_arn" {
+  type = string
 }
 
-variable "adot_chart_version" {
-  description = "Version of the adot-exporter-for-eks-on-ec2 chart (https://aws-observability.github.io/aws-otel-helm-charts)."
+variable "private_subnet_ids" {
+  description = "Subnets the managed Prometheus scraper puts its ENIs in - the cluster's private subnets."
+  type        = list(string)
+}
+
+variable "cluster_security_group_id" {
+  description = "The EKS cluster security group, attached to the scraper's ENIs so it can reach the API server and nodes."
   type        = string
-  default     = "0.22.0"
+}
+
+variable "enable_metrics_collection" {
+  description = "Create the managed Prometheus scraper and the CloudWatch Observability add-on. Set false if the caller runs its own collectors."
+  type        = bool
+  default     = true
 }
 
 variable "create_grafana_workspace" {

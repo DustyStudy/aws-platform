@@ -265,6 +265,7 @@ data "aws_iam_policy_document" "apply_permissions" {
       "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms",
       "cloudwatch:ListTagsForResource", "cloudwatch:TagResource", "cloudwatch:UntagResource",
       "aps:CreateWorkspace", "aps:DeleteWorkspace", "aps:UpdateWorkspaceAlias", "aps:TagResource", "aps:UntagResource", "aps:ListTagsForResource",
+      "aps:CreateScraper", "aps:DeleteScraper", "aps:UpdateScraper", "aps:ListScrapers",
       "aps:CreateLoggingConfiguration", "aps:UpdateLoggingConfiguration", "aps:DeleteLoggingConfiguration", "aps:Describe*",
       "grafana:CreateWorkspace", "grafana:DeleteWorkspace", "grafana:UpdateWorkspace", "grafana:UpdateWorkspaceConfiguration",
       "grafana:TagResource", "grafana:UntagResource", "grafana:ListTagsForResource", "grafana:Describe*",
@@ -332,6 +333,7 @@ data "aws_iam_policy_document" "apply_permissions" {
         "spot.amazonaws.com",
         "elasticloadbalancing.amazonaws.com",
         "grafana.amazonaws.com",
+        "scraper.aps.amazonaws.com",
       ]
     }
   }
