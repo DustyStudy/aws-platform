@@ -37,6 +37,20 @@ resource "aws_kms_key" "observability" {
           "kms:Describe*",
         ]
         Resource = "*"
+      },
+      {
+        # CloudWatch alarms publish to the platform-alerts topic, which is
+        # encrypted with this key. The AWS-managed alias/aws/sns key can't be
+        # used here: its policy doesn't admit cloudwatch.amazonaws.com, so
+        # every alarm notification would be dropped.
+        Sid       = "CloudWatchAlarmsPublish"
+        Effect    = "Allow"
+        Principal = { Service = "cloudwatch.amazonaws.com" }
+        Action    = ["kms:GenerateDataKey*", "kms:Decrypt"]
+        Resource  = "*"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+        }
       }
     ]
   })
@@ -60,6 +74,13 @@ resource "aws_cloudwatch_log_group" "amp" {
 
 # --- ADOT collector: scrapes cluster + tenant workloads, remote_writes to AMP ---
 
+locals {
+  # Where the ADOT chart puts the collector DaemonSet and its ServiceAccount;
+  # the IRSA trust below has to name exactly this pair.
+  adot_namespace       = "amazon-metrics"
+  adot_service_account = "adot-collector"
+}
+
 data "aws_iam_policy_document" "adot_trust" {
   statement {
     effect  = "Allow"
@@ -73,7 +94,7 @@ data "aws_iam_policy_document" "adot_trust" {
     condition {
       test     = "StringEquals"
       variable = "${replace(var.oidc_provider_url, "https://", "")}:sub"
-      values   = ["system:serviceaccount:kube-system:adot-collector"]
+      values   = ["system:serviceaccount:${local.adot_namespace}:${local.adot_service_account}"]
     }
 
     condition {
@@ -90,43 +111,95 @@ resource "aws_iam_role" "adot" {
   tags               = var.tags
 }
 
+# The only wildcard is the log-stream suffix of the Container Insights log
+# group (one stream per node).
+# tfsec:ignore:aws-iam-no-policy-wildcards
 resource "aws_iam_role_policy" "adot_remote_write" {
   name = "amp-remote-write"
   role = aws_iam_role.adot.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "aps:RemoteWrite",
-        "aps:GetSeries",
-        "aps:GetLabels",
-        "aps:GetMetricMetadata",
-      ]
-      Resource = aws_prometheus_workspace.this.arn
-    }]
+    Statement = [
+      {
+        Sid    = "RemoteWriteToAMP"
+        Effect = "Allow"
+        Action = [
+          "aps:RemoteWrite",
+          "aps:GetSeries",
+          "aps:GetLabels",
+          "aps:GetMetricMetadata",
+        ]
+        Resource = aws_prometheus_workspace.this.arn
+      },
+      {
+        # Container Insights metrics (node_cpu_utilization etc. - what the
+        # node alarms below evaluate) are published as EMF log events.
+        Sid    = "PublishContainerInsights"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams",
+        ]
+        Resource = "${aws_cloudwatch_log_group.container_insights.arn}:*"
+      },
+    ]
   })
+}
+
+# Created here rather than by the collector, so it gets the same KMS key and
+# retention as every other platform log group.
+resource "aws_cloudwatch_log_group" "container_insights" {
+  name              = "/aws/containerinsights/${var.cluster_name}/performance"
+  kms_key_id        = aws_kms_key.observability.arn
+  retention_in_days = 365 # CKV_AWS_338
+  tags              = var.tags
 }
 
 resource "helm_release" "adot_collector" {
   count = var.install_adot_collector ? 1 : 0
 
   name       = "adot-collector"
-  namespace  = "kube-system"
+  namespace  = "kube-system" # Helm release metadata only; the chart deploys into local.adot_namespace
   repository = "https://aws-observability.github.io/aws-otel-helm-charts"
   chart      = "adot-exporter-for-eks-on-ec2"
   version    = var.adot_chart_version
 
   values = [yamlencode({
-    serviceAccount = {
-      annotations = {
-        "eks.amazonaws.com/role-arn" = aws_iam_role.adot.arn
+    awsRegion   = data.aws_region.current.name
+    clusterName = var.cluster_name
+    adotCollector = {
+      daemonSet = {
+        namespace = local.adot_namespace
+        serviceAccount = {
+          name = local.adot_service_account
+          annotations = {
+            "eks.amazonaws.com/role-arn" = aws_iam_role.adot.arn
+          }
+        }
+        # A node-level collector has to run on every node, including the
+        # tainted system node group.
+        tolerations = [{ operator = "Exists" }]
+        cwreceivers = {
+          collectionInterval    = "60s"
+          containerOrchestrator = "eks"
+        }
+        ampexporters = {
+          endpoint = "${aws_prometheus_workspace.this.prometheus_endpoint}api/v1/remote_write"
+        }
+        service = {
+          metrics = {
+            receivers  = ["awscontainerinsightreceiver", "prometheus"]
+            processors = ["batch/metrics"]
+            exporters  = ["awsemf", "prometheusremotewrite"]
+          }
+        }
       }
     }
-    awsRegion       = data.aws_region.current.name
-    ampWorkspaceUrl = "${aws_prometheus_workspace.this.prometheus_endpoint}api/v1/remote_write"
   })]
+
+  depends_on = [aws_cloudwatch_log_group.container_insights]
 }
 
 # ---------------------------------------------------------------------------
@@ -155,6 +228,7 @@ resource "aws_iam_role" "grafana" {
 # GetSeries, DescribeAlarmsForMetric, GetMetricData, ...) don't support
 # resource-level ARN scoping - AWS defines them as "*"-only actions.
 # checkov:skip=CKV_AWS_111: same - these are read-only query APIs, not writes.
+# tfsec:ignore:aws-iam-no-policy-wildcards: see the CKV_AWS_355 note above.
 data "aws_iam_policy_document" "grafana_data_sources" {
   statement {
     sid    = "QueryPrometheus"
@@ -214,7 +288,7 @@ resource "aws_grafana_workspace" "this" {
 
 resource "aws_sns_topic" "platform_alerts" {
   name              = "${var.name_prefix}-platform-alerts"
-  kms_master_key_id = "alias/aws/sns"
+  kms_master_key_id = aws_kms_key.observability.arn
   tags              = var.tags
 }
 

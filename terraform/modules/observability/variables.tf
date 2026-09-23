@@ -21,8 +21,9 @@ variable "install_adot_collector" {
 }
 
 variable "adot_chart_version" {
-  type    = string
-  default = "0.19.2"
+  description = "Version of the adot-exporter-for-eks-on-ec2 chart (https://aws-observability.github.io/aws-otel-helm-charts)."
+  type        = string
+  default     = "0.22.0"
 }
 
 variable "create_grafana_workspace" {
