@@ -164,7 +164,7 @@ data "aws_iam_policy_document" "karpenter_controller_permissions" {
     sid       = "AllowAMIParameterRead"
     effect    = "Allow"
     actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:${data.aws_region.current.name}::parameter/aws/service/*"]
+    resources = ["arn:aws:ssm:${data.aws_region.current.region}::parameter/aws/service/*"]
   }
 
   # The EC2NodeClass references the instance profile below by name, so

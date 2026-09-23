@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.65"
     }
     tls = {
       source  = "hashicorp/tls"
@@ -12,11 +12,11 @@ terraform {
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.33"
+      version = "~> 3.2"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.14"
+      version = "~> 3.3"
     }
   }
 
@@ -53,12 +53,13 @@ provider "kubernetes" {
   }
 }
 
+# Helm provider 3.x takes the cluster connection as an attribute, not a block.
 provider "helm" {
-  kubernetes {
+  kubernetes = {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)
 
-    exec {
+    exec = {
       api_version = "client.authentication.k8s.io/v1beta1"
       command     = "aws"
       args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.aws_region]
