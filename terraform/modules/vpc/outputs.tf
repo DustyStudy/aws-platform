@@ -15,11 +15,15 @@ output "private_subnet_ids" {
 
   # Whatever runs in these subnets (EKS nodes, the Karpenter controller) may
   # still need to reach AWS APIs while it's being torn down - Karpenter has
-  # to terminate its own nodes. Tying consumers to the NAT routes makes
-  # terraform destroy them before it removes the egress path.
+  # to terminate its own nodes. Tying consumers to the whole egress path
+  # (private route -> NAT -> public route -> IGW) makes terraform destroy
+  # them before any hop of it.
   depends_on = [
     aws_route.private_nat,
     aws_route_table_association.private,
+    aws_nat_gateway.this,
+    aws_route.public_internet,
+    aws_route_table_association.public,
   ]
 }
 
