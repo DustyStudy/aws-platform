@@ -69,10 +69,13 @@ jobs:
             terraform -chdir="$dir" test
             echo "::endgroup::"
           done
-      - name: Validate reference compositions
+      # The environment roots are otherwise only validated inside the plan job,
+      # which skips when AWS isn't configured - so a provider upgrade that
+      # breaks them could still show green. No backend, no credentials needed.
+      - name: Validate environments and reference compositions
         run: |
           set -euo pipefail
-          for dir in examples/hybrid-network; do
+          for dir in terraform/environments/dev terraform/environments/prod examples/hybrid-network; do
             terraform -chdir="$dir" init -backend=false -input=false >/dev/null
             terraform -chdir="$dir" validate
           done

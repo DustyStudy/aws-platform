@@ -163,7 +163,7 @@ resource "aws_kms_key" "flow_logs" {
         Sid    = "CloudWatchLogs"
         Effect = "Allow"
         Principal = {
-          Service = "logs.${data.aws_region.current.name}.amazonaws.com"
+          Service = "logs.${data.aws_region.current.region}.amazonaws.com"
         }
         Action = [
           "kms:Encrypt*",
