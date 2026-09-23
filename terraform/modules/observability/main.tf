@@ -80,8 +80,8 @@ resource "aws_cloudwatch_log_group" "amp" {
 # dropped every metric.)
 #
 #   Prometheus -> AMP: the AWS managed scraper. It runs outside the cluster
-#                      and reaches the API server and kubelets through ENIs in
-#                      the private subnets. There's nothing in-cluster to patch.
+#                      and reaches the API server through ENIs in the private
+#                      subnets. There's nothing in-cluster to patch.
 #   Container Insights -> CloudWatch: the amazon-cloudwatch-observability EKS
 #                      add-on. Its node metrics are what the node CPU/memory
 #                      alarms below evaluate.
@@ -112,67 +112,10 @@ resource "aws_prometheus_scraper" "this" {
   tags = var.tags
 }
 
-# The scraper authenticates to the cluster as its own service-linked role,
-# mapped to a Kubernetes user that gets read-only discovery/metrics RBAC.
-resource "aws_eks_access_entry" "scraper" {
-  count = var.enable_metrics_collection ? 1 : 0
-
-  cluster_name      = var.cluster_name
-  principal_arn     = aws_prometheus_scraper.this[0].role_arn
-  kubernetes_groups = []
-  user_name         = "aps-collector-user"
-}
-
-resource "kubernetes_cluster_role" "scraper" {
-  count = var.enable_metrics_collection ? 1 : 0
-
-  metadata {
-    name = "aps-collector-role"
-  }
-
-  rule {
-    api_groups = [""]
-    resources  = ["nodes", "nodes/proxy", "nodes/metrics", "services", "endpoints", "pods", "ingresses", "configmaps"]
-    verbs      = ["describe", "get", "list", "watch"]
-  }
-
-  rule {
-    api_groups = ["extensions", "networking.k8s.io"]
-    resources  = ["ingresses/status", "ingresses"]
-    verbs      = ["describe", "get", "list", "watch"]
-  }
-
-  rule {
-    api_groups = ["metrics.eks.amazonaws.com"]
-    resources  = ["kcm/metrics", "ksh/metrics"]
-    verbs      = ["get"]
-  }
-
-  rule {
-    non_resource_urls = ["/metrics"]
-    verbs             = ["get"]
-  }
-}
-
-resource "kubernetes_cluster_role_binding" "scraper" {
-  count = var.enable_metrics_collection ? 1 : 0
-
-  metadata {
-    name = "aps-collector-user-role-binding"
-  }
-
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "ClusterRole"
-    name      = kubernetes_cluster_role.scraper[0].metadata[0].name
-  }
-
-  subject {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "User"
-    name      = aws_eks_access_entry.scraper[0].user_name
-  }
-}
+# No access entry or RBAC here: creating the scraper makes AMP add an access
+# entry for its service-linked role with the AWS-managed
+# AmazonPrometheusScraperPolicy. EKS refuses to let anyone else create access
+# entries for a service-linked role, so declaring one here fails the apply.
 
 # --- Container Insights (CloudWatch agent add-on, IRSA) ----------------------
 

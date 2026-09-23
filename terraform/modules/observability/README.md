@@ -6,7 +6,8 @@ latency spike across five teams' services on the same cluster."
 
 - **AWS Managed Prometheus (AMP)** - one workspace per environment, fed by
   the AWS managed scraper. The scraper runs outside the cluster and reaches it
-  through ENIs in the private subnets, with read-only RBAC. It collects
+  through ENIs in the private subnets. AMP creates its EKS access entry
+  (`AmazonPrometheusScraperPolicy`). It collects
   cAdvisor, API server, and any pod annotated `prometheus.io/scrape: "true"`.
 - **Container Insights** - the `amazon-cloudwatch-observability` EKS add-on
   (IRSA, container logs off). It publishes the node metrics the CPU/memory
