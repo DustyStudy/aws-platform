@@ -67,7 +67,9 @@ jobs:
       - name: Check the environment is deployed
         id: deployed
         run: |
-          if [ -z "$(terraform state list)" ]; then
+          # terraform-bin: setup-terraform's wrapper adds its own lines to
+          # stdout, so the wrapped `terraform state list` is never empty.
+          if [ -z "$(terraform-bin state list)" ]; then
             echo "::notice::${{ matrix.environment }} has no Terraform state (never applied) - nothing to check for drift."
             echo "deployed=false" >> "$GITHUB_OUTPUT"
           else

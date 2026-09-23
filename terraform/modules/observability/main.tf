@@ -60,6 +60,12 @@ resource "aws_prometheus_workspace" "this" {
   alias = "${var.name_prefix}-amp"
   tags  = var.tags
 
+  # AMP tags the workspace itself when a managed scraper targets it. Without
+  # this, every apply strips the tag and every drift check reports it.
+  lifecycle {
+    ignore_changes = [tags["AMPAgentlessScraper"]]
+  }
+
   logging_configuration {
     log_group_arn = "${aws_cloudwatch_log_group.amp.arn}:*"
   }
