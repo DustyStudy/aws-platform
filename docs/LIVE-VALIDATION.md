@@ -38,7 +38,7 @@ were restricted to `main`.
 | Change-gate unit tests | 18 pass |
 | Policy unit tests (`conftest verify`, new) | 7 pass |
 | tfsec (now blocking - see defect 9) | 0 findings; remaining wildcards carry an inline justification |
-| Checkov | 306 passed, 0 failed |
+| Checkov | 299 passed, 0 failed |
 | tflint | clean |
 | conftest against the real dev plan | 12/12 pass |
 
@@ -47,7 +47,7 @@ were restricted to `main`.
 | What | How it was checked | Result |
 |---|---|---|
 | State buckets, KMS key, OIDC provider, 3 roles | `terraform apply` in `bootstrap/` (19 resources) | created |
-| Plan role via OIDC | [PR plan run](https://github.com/DustyStudy/aws-platform/actions/runs/35883489240) - `terraform plan` for dev (live state, incl. in-cluster refresh) and prod, conftest on both | pass |
+| Plan role via OIDC | [PR plan run](https://github.com/DustyStudy/aws-platform/actions/runs/35883489240) - `terraform plan` for dev (live state, incl. in-cluster refresh) and prod, conftest on both; re-run green on the final code ([run](https://github.com/DustyStudy/aws-platform/actions/runs/35908431691)) | pass |
 | Plan role takes the S3 state lock and waits for it | same run; the dev plan waited for a concurrent apply's lock instead of failing | pass |
 | Apply role via OIDC | [Terraform Apply, dev](https://github.com/DustyStudy/aws-platform/actions/runs/35883481492) - the role rolled out the quota, network policy, SNS and observability fixes to the live cluster | pass (first attempt failed - defect 14) |
 | Drift detection | [Drift Detection](https://github.com/DustyStudy/aws-platform/actions/runs/35890963874) against the clean-room environment: dev `No changes. Your infrastructure matches the configuration.`; prod skipped with `prod has no Terraform state (never applied)` | pass (earlier runs failed on defects 20-21; their issues #9-#11 were closed with an explanation) |
@@ -130,11 +130,11 @@ and destroyed.
 | 17 | The apply role trusts `environment:dev`/`environment:prod`, but `prod` didn't exist and `dev` allowed any branch | any branch declaring `environment: prod` could have assumed the apply role with no reviewer | `prod` created with a required reviewer; both Environments restricted to `main` (documented in ARCHITECTURE.md) |
 | 18 | `onboard-service.yml` checked out `your-github-org/aws-platform` | placeholder | points at this repo |
 | 19 | Destroy ordering: nothing tied in-cluster resources to the add-ons and IAM they need while being deleted | first `terraform destroy` hung: tenant NetworkPolicies kept the VPC CNI's finalizer and the EC2NodeClass kept Karpenter's, after Terraform had already removed `vpc-cni`/`kube-proxy` and Karpenter's IAM policy | Karpenter's release depends on them; `cluster_name` (read by every in-cluster consumer) depends on the networking add-ons. Verified by the clean-room run below |
+| 20 | Creating a managed scraper makes AMP tag its workspace `AMPAgentlessScraper`; Terraform stripped it on every apply | Drift Detection reported `~ tags { - "AMPAgentlessScraper" }` on a freshly applied environment - it would have opened a drift issue every day | `ignore_changes` on that one service-owned tag (live: `No changes`) |
+| 21 | Drift detection treated a never-applied environment as drifted, and its "is it deployed" check couldn't work: `setup-terraform`'s wrapper adds output to stdout, so `terraform state list` was never empty | prod leg failed and opened a drift issue | check with `terraform-bin`; skip with a notice (live: prod skipped, run green) |
 | 22 | Destroy ordering, one layer down: EKS only referenced `vpc_id`/subnet IDs, so Terraform deleted the egress path first | clean-room destroy: Karpenter couldn't reach the EC2 API (`dial tcp ...:443: i/o timeout`) to terminate its nodes, and the `karpenter-defaults` uninstall timed out. A first fix covered only the private route and NAT gateway; the next run lost the *public* subnets' route to the internet gateway instead | the VPC module's `private_subnet_ids` output depends on the whole path (private routes → NAT → public route → IGW), so everything in those subnets is destroyed while egress still works |
 | 23 | Introduced during this test by the IAM tightening in defect 5: Karpenter's `iam:GetInstanceProfile` was scoped to the Terraform-managed profile, but on EC2NodeClass deletion Karpenter also checks the `<cluster>_<hash>` profile it would have generated | clean-room teardown: NodeClass stuck `Terminating` on `not authorized to perform: iam:GetInstanceProfile on resource: instance profile platform-dev-eks_158...` | allow reads of that name pattern too (still narrower than upstream's `*`); the NodeClass then finalized immediately |
 | 24 | A managed scraper took ~15m to create and over 20m to delete - longer than the provider's default delete timeout | clean-room destroy: `waiting for Prometheus Scraper ... delete: timeout while waiting for resource to be gone (last state: 'DELETING', timeout: 20m0s)` | explicit `timeouts { create = "30m", delete = "45m" }` |
-| 20 | Creating a managed scraper makes AMP tag its workspace `AMPAgentlessScraper`; Terraform stripped it on every apply | Drift Detection reported `~ tags { - "AMPAgentlessScraper" }` on a freshly applied environment - it would have opened a drift issue every day | `ignore_changes` on that one service-owned tag (live: `No changes`) |
-| 21 | Drift detection treated a never-applied environment as drifted, and its "is it deployed" check couldn't work: `setup-terraform`'s wrapper adds output to stdout, so `terraform state list` was never empty | prod leg failed and opened a drift issue | check with `terraform-bin`; skip with a notice (live: prod skipped, run green) |
 
 ## Clean-room run of the final code
 
@@ -158,4 +158,24 @@ nothing, to show that a first apply works in one pass with no manual steps:
 
 ## Teardown
 
-TEARDOWN_PLACEHOLDER
+Everything was destroyed with Terraform: the hybrid harness (127 resources),
+the dev environment (106), then `bootstrap/` (19) after its versioned state
+buckets were emptied. The repo's Actions variables (`PLAN_ROLE_ARN`,
+`APPLY_ROLE_ARN`, ...) were deleted, so the workflows skip their AWS jobs
+again.
+
+A sweep of the account afterwards found **zero** EC2 instances, VPCs, ENIs,
+Elastic IPs, NAT/transit gateways, VPN connections, IPAMs, EKS clusters, load
+balancers, Resolver endpoints, ACM certificates, AMP workspaces/scrapers, ECR
+repositories, SQS queues, SNS topics, CloudWatch alarms, secrets, S3 buckets,
+log groups, OIDC providers, instance profiles or platform IAM roles. What
+remains is inert and free:
+
+- 30 customer-managed KMS keys in `PendingDeletion` (AWS enforces a waiting
+  period; keys pending deletion aren't billed)
+- Service-linked roles that AWS created on first use of EKS, managed node
+  groups, Auto Scaling, Spot, ELB, IPAM and Transit Gateway, plus the
+  Auto Scaling-managed EventBridge rule
+
+Left in place on purpose: the `prod` GitHub Environment (required reviewer,
+`main` only) and the `main`-only restriction on `dev` (defect 17).
