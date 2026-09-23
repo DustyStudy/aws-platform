@@ -60,10 +60,10 @@ jobs:
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-      - name: terraform test (every module that has tests)
+      - name: terraform test (every module and example that has tests)
         run: |
           set -euo pipefail
-          for dir in $(find terraform/modules bootstrap -type d -name tests -exec dirname {} \; | sort); do
+          for dir in $(find terraform/modules bootstrap examples -type d -name tests -exec dirname {} \; | sort); do
             echo "::group::$dir"
             terraform -chdir="$dir" init -backend=false -input=false >/dev/null
             terraform -chdir="$dir" test
@@ -161,21 +161,26 @@ jobs:
 
       - name: Terraform plan
         id: plan
-        # Wait out an in-progress apply's state lock instead of failing on it.
-        run: terraform plan -input=false -no-color -lock-timeout=15m -out=tfplan.binary
+        # Wait out an in-progress apply's state lock instead of failing on it
+        # (a first apply that creates the EKS cluster runs ~20-25 minutes).
+        run: terraform plan -input=false -no-color -lock-timeout=30m -out=tfplan.binary
         continue-on-error: true
 
+      # Skipped when plan failed: there's no plan file, and the plan step's own
+      # error (surfaced by "Fail if plan errored") is the one that matters.
       - name: Save plan text for PR comment
+        if: steps.plan.outcome == 'success'
         run: terraform show -no-color tfplan.binary > tfplan.txt
 
       - name: Policy gate (conftest)
+        if: steps.plan.outcome == 'success'
         run: |
           terraform show -json tfplan.binary > plan.json
           docker run --rm -v "$PWD":/project -v "$PWD/../../../policy/conftest":/policy \
             openpolicyagent/conftest test /project/plan.json -p /policy
 
       - name: Comment plan on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.plan.outcome == 'success'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |

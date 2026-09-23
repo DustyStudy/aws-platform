@@ -61,9 +61,23 @@ jobs:
 
       - run: terraform init -input=false
 
+      # An environment that has never been applied has no state to drift from;
+      # its "plan" is every resource as new. Report that instead of opening a
+      # drift issue for it.
+      - name: Check the environment is deployed
+        id: deployed
+        run: |
+          if [ -z "$(terraform state list)" ]; then
+            echo "::notice::${{ matrix.environment }} has no Terraform state (never applied) - nothing to check for drift."
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deployed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Plan (detect drift)
         id: plan
-        run: terraform plan -input=false -no-color -lock-timeout=15m -detailed-exitcode -out=tfplan.binary
+        if: steps.deployed.outputs.deployed == 'true'
+        run: terraform plan -input=false -no-color -lock-timeout=30m -detailed-exitcode -out=tfplan.binary
         continue-on-error: true
 
       - name: Save plan text

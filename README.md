@@ -27,7 +27,7 @@ terraform/
     vpc/               # multi-AZ, public/private/data subnets, flow logs
     eks-platform/       # private-endpoint EKS, IRSA, SSM node access, Karpenter autoscaling
     tenant-namespace/  # the golden path: namespace + quota + network policy + ECR + IRSA role, per service
-    observability/     # AWS Managed Prometheus + Grafana, CloudWatch alarms
+    observability/     # AMP (managed scraper) + Grafana, Container Insights, CloudWatch alarms
     transit-gateway/   # hub-and-spoke TGW; default route table OFF, segmentation via explicit association/propagation
     site-to-site-vpn/  # BGP IKEv2 VPN to the TGW, pinned crypto suites, tunnel logs + redundancy-lost alarm
     direct-connect/    # DX gateway + transit VIFs + TGW association on an existing connection
@@ -46,6 +46,7 @@ policy/conftest/       # OPA policies enforced in CI: tags, encryption, open sec
   drift-detection.yml           # daily scheduled plan, opens/updates an issue if state has drifted
   onboard-service.yml           # reusable workflow_call - an app team's own repo calls this to self-onboard
 docs/
+  LIVE-VALIDATION.md  # the live deployment test: what was verified, what broke, evidence
   ARCHITECTURE.md     # trust policy shapes, tenant isolation model, state layout
   ONBOARDING.md        # the self-service path, end to end, from an app team's point of view
   CHANGE-MANAGEMENT.md # how PR -> plan -> change record -> gated apply maps onto an ITSM process
@@ -117,13 +118,21 @@ Beyond the EKS platform, the repo covers the operational side of running it:
 
 ## Deploying this
 
-You'd need to run `bootstrap/` once with an operator's own credentials to
-create the state buckets and OIDC roles, then wire their outputs into this
-repo's Actions variables - see [`bootstrap/README.md`](bootstrap/README.md)
-and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the trust policy
-shapes. **This repo is intentionally not wired to a real AWS account** - it
-exists to show the Terraform, the CI/CD trust model, and the policy gates,
-not to run live infrastructure.
+Run `bootstrap/` once with an operator's own credentials to create the
+state buckets and OIDC roles, then set their outputs as this repo's Actions
+variables (`PLAN_ROLE_ARN`, `APPLY_ROLE_ARN`, `AWS_REGION`, and optionally
+`PLATFORM_ADMIN_ARNS` / `EKS_PUBLIC_ACCESS_CIDRS`) - see
+[`bootstrap/README.md`](bootstrap/README.md) and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the trust policy shapes and
+the GitHub Environment settings the apply role depends on.
+
+**Tested live.** The whole stack - bootstrap, the dev environment through the
+CI roles, and the hybrid-networking modules - was deployed into a real AWS
+Organizations member account, verified, and torn down on 2026-09-23. What was
+checked, the 19 defects that turned up and how each was fixed, and the
+evidence are in [`docs/LIVE-VALIDATION.md`](docs/LIVE-VALIDATION.md). Nothing
+is left running: the repo's CI variables are unset, so its workflows skip their
+AWS jobs until someone bootstraps their own account.
 
 ## License
 
